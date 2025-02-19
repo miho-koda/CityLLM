@@ -1,7 +1,4 @@
 # openai_module.py
-import io
-import contextlib
-import inspect
 import types
 
 
