@@ -8,13 +8,8 @@ from typing import Annotated
 from typing_extensions import TypedDict
 from langgraph.graph.message import add_messages
 
-# Define State for workflow
-class State(TypedDict):
-    messages: Annotated[list, add_messages]  # User conversation history
-    task_type: str  # "file_io", "code_writer", "search_web"
-    file_results: str
-    code_results: str
-    search_results: str
+from workflow.state import State, FileIOArgs, CodeWriterArgs, SearchWebArgs
+
 
 # GeoPandas Documentation Reference
 geo_docs = """
@@ -78,7 +73,7 @@ def code_writer(state: State):
     """
 
     # Get Response from LLM
-    response = llm.invoke(prompt).strip()
+    response = llm.invoke(prompt).content
 
     # Remove code block formatting if present
     if response.startswith("```python"):
@@ -87,3 +82,39 @@ def code_writer(state: State):
         response = response[:-3]
 
     return {"code_results": response.strip()}  # Return as dictionary
+
+'''
+#TEST SCRIPT
+import json
+
+# ✅ Sample test cases
+test_cases = [
+    {"content": "Write a function to read a shapefile and return its centroid.",},
+    {"content": "Create a function to buffer geometries in a GeoDataFrame by 10 units.",},
+    {"content": "Write a function that performs a spatial join between two GeoDataFrames.",},
+    {"content": "Create a function to plot a GeoDataFrame with a legend.",},
+    {"content": "Write a function that converts a GeoDataFrame to a different coordinate reference system (CRS=4326).",},
+]
+
+# ✅ Function to run the test cases
+def test_code_writer():
+    for i, test in enumerate(test_cases, 1):
+        print(f"\n📝 **Test Case {i}:** {test['content']}")
+
+        # Mock state format expected by code_writer function
+        state = {"messages": [{"role": "user", "content": test["content"]}]}
+
+        # Call the code_writer function
+        result = code_writer(state)
+
+        # Extract generated code
+        generated_code = result["code_results"]
+
+        # Pretty-print the generated code
+        print("🖥️ **Generated Code:**\n", generated_code)
+
+        
+
+# ✅ Run the test function
+test_code_writer()
+'''

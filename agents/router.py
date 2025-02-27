@@ -10,13 +10,9 @@ import json
 from typing import Annotated
 from typing_extensions import TypedDict
 from langgraph.graph.message import add_messages
-class State(TypedDict):
-    messages: Annotated[list, add_messages]  # User conversation history
-    task_type: str  # "file_io", "code_writer", "search_web"
-    file_results: str
-    code_results: str
-    search_results: str
+from typing import TypedDict, Union, Literal, Annotated
 
+from workflow.state import State, FileIOArgs, CodeWriterArgs, SearchWebArgs
 
 
 llm = ChatOpenAI(model="gpt-4-turbo", api_key=API_KEYS["openai"])    
@@ -29,45 +25,71 @@ def router(state: State):
     Request: "{user_message}"
 
     Task Types:
-    - "file_io": For reading or writing files based on user input
-    - "code_writer": For generating code or providing code-based solutions
-    - "search_web": For retrieving information available online
+    1. **file_io**: For reading from or writing to files.
+    - Arguments:
+        - `operation`: Must be either `"read"` or `"write"`.
+        - For `"read"`: Specify the file to read from using `file_path`.
+        - For `"write"`: Specify the file to write to using `file_path` and provide the `content` to write.
+        - `file_path`: The path to the file (e.g., `"data/input.csv"`).
+        - `content` (only for `"write"`): The data to write to the file (e.g., a string, JSON, or DataFrame).
+
+    2. **code_writer**: For generating code or providing code-based solutions.
+    - Arguments:
+        - `language`: The programming language to use (e.g., `"python"`, `"R"`, `"javascript"`).
+        - `requirements`: A clear description of what the code should accomplish (e.g., `"Parse a CSV file and calculate averages"`).
+        - `context`: Additional context or input data needed for the task (e.g., file paths, sample data, or specific instructions).
+
+    3. **search_web**: For retrieving information from the web.
+    - Arguments:
+        - `query`: The search query to execute (e.g., `"public transport stations near [latitude, longitude]"`).
+        - `focus_area`: The domain or focus area of the search (e.g., `"city planning"`, `"environmental data"`).
+
+    4. **llm_extraction**: For processing raw data or text using an LLM to extract relevant information.
+    - Arguments:
+        - `input`: The raw data or text from a previous task (e.g., `"Raw search results from task 0"`).
+        - `instructions`: Specific instructions for the LLM to extract or process the input data (e.g., `"Extract the names, latitudes, and longitudes of public transport stations"`).
 
     Return a JSON array of tasks where each task has:
-    1. A descriptive task_type (one of the above)
-    2. A unique integer ID (0, 1, 2)
-    3. Dependencies (IDs of tasks that must complete before this one)
-    4. Arguments specific to each task type:
-    - file_io: "operation" ("read"/"write"), "file_path", "content" (for writes)
-    - code_writer: "language", "requirements", "context"
-    - search_web: "query", "focus_area"
+    1. A descriptive `task_type` (one of the above).
+    2. A unique integer `id` (0, 1, 2, ...).
+    3. `dep`: An array of task IDs that must complete before this one (empty if no dependencies).
+    4. `args`: A dictionary of task-specific arguments as described above.
 
     Example format:
     [
-    {{
-        "task_type": "file_io",
-        "id": 1,
-        "dep": [],
-        "args": {{
-        "operation": "read",
-        "file_path": "input.csv"
+        {{
+            "task_type": "file_io",
+            "id": 0,
+            "dep": [],
+            "args": {{
+                "operation": "read",
+                "file_path": "data/input.csv"
+            }}
+        }},
+        {{
+            "task_type": "llm_extraction",
+            "id": 1,
+            "dep": [0],
+            "args": {{
+                "input": "Raw data from task 0",
+                "instructions": "Extract relevant columns and clean the data"
+            }}
+        }},
+        {{
+            "task_type": "code_writer",
+            "id": 2,
+            "dep": [1],
+            "args": {{
+                "language": "python",
+                "requirements": "Calculate averages and generate a summary report",
+                "context": "Use the cleaned data from task 1"
+            }}
         }}
-    }},
-    {{
-        "task_type": "code_writer",
-        "id": 2,
-        "dep": [1],
-        "args": {{
-        "language": "python",
-        "requirements": "Parse CSV and calculate averages"
-        }}
-    }}
     ]
 
     Ensure tasks are logically sequenced and dependencies are correctly specified to produce the desired result.
     Return only valid, executable JSON.
     """
-
 
     # Invoke LLM to generate structured tasks
     tasks_json = llm.invoke(prompt).content
@@ -97,14 +119,11 @@ def router(state: State):
 
 
 
+# TEST SCRIPT 
 
-# Example test inputs
 test_inputs = [
-    "Find the latest research on quantum computing and summarize it.",
-    "Write a Python script to scrape weather data and save it to a file.",
-    "Fetch stock prices for Tesla and plot a graph.",
-    "Read the contents of 'report.txt' and summarize the key points.",
-    "Write a function in Python that takes a list of numbers and returns the sum."
+    "Search for public transport stations near cambridge massachusetts, extract their names and coordinates, and generate a map visualizing their locations.",
+    #"Compare land use data from two different years (stored in separate shapefiles) and identify areas where land use has changed."
 ]
 
 def test_router():
