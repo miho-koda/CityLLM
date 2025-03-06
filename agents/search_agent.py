@@ -6,11 +6,10 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from config import API_KEYS  
 
-from typing import Annotated
-from typing_extensions import TypedDict
-from langgraph.graph.message import add_messages
 
 from workflow.state import State, FileIOArgs, CodeWriterArgs, SearchWebArgs
+
+from agents.llm_extraction_agent import llm_extraction
 
 os.environ["TAVILY_API_KEY"] = API_KEYS["tavily"]
 
@@ -23,7 +22,10 @@ def search_web(state: State):
     search_query = state["messages"][0]
     search_results = tavily_search.invoke({"query": search_query})
     
-    return {"search_results": search_results}
+    state['dep_results'] = search_results
+    final_op = llm_extraction(state)
+    
+    return {"search_results": final_op}
 
 
 '''

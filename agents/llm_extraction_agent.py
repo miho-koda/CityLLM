@@ -25,7 +25,7 @@ def llm_extraction(state: State):
     """    
     # Get the instructions and input from task_args
     instructions = state.get("task_args", {}).get("instructions", "")
-    input_data = state.get("task_args", {}).get("input", state.get("search_results", {}))
+    input_data = state['dep_results']
     
     # Prepare the prompt
     prompt = f"{instructions}\n\nData:\n{input_data}"

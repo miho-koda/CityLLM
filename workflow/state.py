@@ -17,9 +17,10 @@ class CodeWriterArgs(BaseTaskArgs):
 
 class SearchWebArgs(BaseTaskArgs):
     focus_area: str
+    instructions: str
 
 class LLMExtractionArgs(BaseTaskArgs):
-    instructions: str  
+    instructions: str
 
 # Task type literals
 TaskType = Literal["file_io", "code_writer", "search_web", "llm_extraction"]
@@ -27,14 +28,10 @@ TaskType = Literal["file_io", "code_writer", "search_web", "llm_extraction"]
 # Union type for all possible task arguments
 TaskArgs = Union[FileIOArgs, CodeWriterArgs, SearchWebArgs, LLMExtractionArgs]
 
-# Define the main state class with task-specific result types
+# Define the main state class
 class State(TypedDict):
     messages: Annotated[List[Dict[str, Any]], "add_messages"]  # User conversation history
-    task_type: TaskType
+    task_type: TaskType  # Type of the current task
     task_args: TaskArgs  # Task-specific arguments
     
-    # Results from various operations
-    file_results: Optional[Any]  # Results from file operations
-    code_results: Optional[Any]  # Results from code generation
-    search_results: Optional[Any]  # Results from web searches
-    llm_results: Optional[Any]  # Results from LLM extraction
+    dep_results: List[Any]  # List to store results from dependencies (can store files, code, strings, etc.)

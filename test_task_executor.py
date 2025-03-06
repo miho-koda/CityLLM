@@ -1,89 +1,26 @@
 import unittest
 import json
 import os
+from agents.router import router
 from agents.task_executor import main
 
-class TestSimpleTaskExecutor(unittest.TestCase):
-
+class TestTaskExecutor(unittest.TestCase):
     def setUp(self):
-        """Create a simple JSON file for testing."""
-        self.test_json_file = "test_simple_tasks.json"
-
-        # simple_tasks = [
-        #     {
-        #         "task_type": "file_io",
-        #         "id": 1,
-        #         "dep": [],
-        #         "args": {
-        #             "operation": "write",
-        #             "file_path": "/Users/mihokoda/Desktop/CityLLM/code files/test data/data.txt", 
-        #             "content": "Simple Test!"
-        #         }
-        #     },
-        #     {
-        #         "task_type": "file_io",
-        #         "id": 2,
-        #         "dep": [1],
-        #         "args": {
-        #             "operation": "read",
-        #             "file_path": "/Users/mihokoda/Desktop/CityLLM/code files/test data/data.txt"
-        #         }
-        #     }
-        # ]
-
-
-
-        simple_tasks = [
-            {
-                "task_type": "search_web",
-                "id": 0,
-                "dep": [],
-                "args": {
-                    "query": "what is the latitudes, and longtitudes of the public transport stations near Cambridge Massachusetts",
-                    "focus_area": "transportation"
-                }
-            },
-            {
-                "task_type": "llm_extraction",
-                "id": 1,
-                "dep": [
-                    0
-                ],
-                "args": {
-                    "input": "Search results from task 0",
-                    "instructions": "Extract the names, latitudes, and longitudes of public transport stations"
-                }
-            },
-            {
-                "task_type": "code_writer",
-                "id": 2,
-                "dep": [
-                    1
-                ],
-                "args": {
-                    "language": "javascript",
-                    "requirements": "Generate a map visualizing locations of public transport stations",
-                    "context": "Data points with names and coordinates from task 1"
-                }
-            },
-            {
-                "task_type": "file_io",
-                "id": 3,
-                "dep": [
-                    2
-                ],
-                "args": {
-                    "operation": "write",
-                    "file_path": "output/map_visualization.html",
-                    "content": "Generated map code from task 2"
-                }
-            }
+        """Set up test inputs and expected outputs."""
+        self.test_inputs = [
+            "Search for public transport stops in San Francisco, use a Python script to compute a 500-meter buffer around each stop using GeoPandas, and save the resulting accessibility zones as a GeoJSON file.",
+            "Compare land use data from two different years (stored in separate shapefiles) and identify areas where land use has changed.",
+            "Search for public transport stations near Cambridge, Massachusetts, extract their names and coordinates, and generate a map visualizing their locations.",
+            "Retrieve satellite land cover data for New York City from 2000 and 2020, process the data using a Python script to compute changes in green space coverage, and save the results as a CSV file."
         ]
+    
 
 
-
-        with open(self.test_json_file, "w") as f:
-            json.dump(simple_tasks, f)
+        # Expected outputs for each test input
+        self.expected_outputs = [
+            "output/map_visualization.html",  # Expected output file for Test Case 1
+            "land_use_changes.shp"            # Expected output file for Test Case 2
+        ]
 
     def tearDown(self):
         """Clean up test files."""
@@ -92,13 +29,39 @@ class TestSimpleTaskExecutor(unittest.TestCase):
         if os.path.exists("simple_test.txt"):
             os.remove("simple_test.txt")
 
-    def test_main_execution(self):
-        """Test that main() runs successfully with the simple task JSON file."""
-        try:
-            main(self.test_json_file)
-            self.assertTrue(True)  # If no exceptions, the test passes
-        except Exception as e:
-            self.fail(f"Test failed due to exception: {e}")
+    def test_router_and_task_executor(self):
+        """Test the router and task_executor to ensure they work together correctly."""
+        self.test_json_file = "test_simple_tasks.json"
+        for i, user_input in enumerate(self.test_inputs):
+            print(f"\n**Test Case {i + 1}:** {user_input}")
+
+
+            # Step 1: Call the router function to decompose the user input into tasks
+            tasks = router(user_input)
+
+            print("🔍 **Decomposed Tasks:**")
+            print(json.dumps(tasks, indent=4))
+
+            # Step 2: Call the task_executor to execute the tasks
+            try:
+                main(tasks)  # Directly pass the tasks list to execute_tasks
+                print("✅ **Task Execution Completed Successfully**")
+            except Exception as e:
+                self.fail(f"Task execution failed due to exception: {e}")
+
+            # Step 3: Validate the actual output
+            expected_output = self.expected_outputs[i]
+            self.assertTrue(os.path.exists(expected_output), f"Test case {i + 1} failed: Expected output file '{expected_output}' was not created.")
+
+            # Additional validation (if applicable)
+            if expected_output == "output/map_visualization.html":
+                # Check if the map visualization file is not empty
+                with open(expected_output, "r") as f:
+                    content = f.read()
+                    self.assertTrue(content.strip(), "Map visualization file is empty.")
+            elif expected_output == "land_use_changes.shp":
+                # Check if the shapefile exists and is not empty
+                self.assertTrue(os.path.getsize(expected_output) > 0, "Land use changes file is empty.")
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,6 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from config import API_KEYS
-from workflow import graph
 import json
 
 
@@ -17,45 +16,69 @@ from workflow.state import State, FileIOArgs, CodeWriterArgs, SearchWebArgs
 
 llm = ChatOpenAI(model="gpt-4-turbo", api_key=API_KEYS["openai"])    
 
-def router(state: State):
-    user_message = state["messages"][-1]["content"]
+def router(user_message):
     prompt = f"""
-    Analyze the user request below and decompose it into a structured workflow of interdependent tasks in JSON format:
+    You are an advanced task planner responsible for breaking down a high-level user request into a structured, interdependent workflow using a minimal number of AI agents while ensuring **maximal efficiency**.
 
-    Request: "{user_message}"
+    ### **User Request**
+    "{user_message}"
 
-    Task Types:
-    1. **file_io**: For reading from or writing to files.
-    - Arguments:
-        - `operation`: Must be either `"read"` or `"write"`.
-        - For `"read"`: Specify the file to read from using `file_path`.
-        - For `"write"`: Specify the file to write to using `file_path` and provide the `content` to write.
-        - `file_path`: The path to the file (e.g., `"data/input.csv"`).
-        - `content` (only for `"write"`): The data to write to the file (e.g., a string, JSON, or DataFrame).
+    ### **Your Task**
+    Analyze the request and decompose it into a **logical sequence of interdependent tasks**, ensuring that:
+    - **Dependencies are correctly defined** (a task may depend on the output of multiple tasks).
+    - **The fewest number of AI agents are used** while maintaining **optimal performance**.
+    - **Tasks are ordered efficiently** to avoid redundant computation.
+    - **Minimize multiple calls to `code_writer` by writing a single, comprehensive script that can handle multiple operations at once.**
 
-    2. **code_writer**: For generating code or providing code-based solutions.
-    - Arguments:
-        - `language`: The programming language to use (e.g., `"python"`, `"R"`, `"javascript"`).
-        - `requirements`: A clear description of what the code should accomplish (e.g., `"Parse a CSV file and calculate averages"`).
-        - `context`: Additional context or input data needed for the task (e.g., file paths, sample data, or specific instructions).
+    ### **Available Task Types**
+    Your decomposition should use the following structured task types:
 
-    3. **search_web**: For retrieving information from the web.
-    - Arguments:
-        - `query`: The search query to execute (e.g., `"public transport stations near [latitude, longitude]"`).
-        - `focus_area`: The domain or focus area of the search (e.g., `"city planning"`, `"environmental data"`).
+    #### **1. file_io** (Read/Write operations)
+    - Used when reading from or writing to files.
+    - **Arguments:**
+    - `operation`: Must be either `"read"` or `"write"`.
+    - **For `"read"`:** Specify the file to read from using `file_path`.
+    - **For `"write"`:** Specify `file_path` and the `content` to be written.
+    - `file_path`: The file's location (e.g., `"data/input.csv"`).
+    - `content` (for `"write"` only): The actual data to write (e.g., a string, JSON, or DataFrame).
 
-    4. **llm_extraction**: For processing raw data or text using an LLM to extract relevant information.
-    - Arguments:
-        - `input`: The raw data or text from a previous task (e.g., `"Raw search results from task 0"`).
-        - `instructions`: Specific instructions for the LLM to extract or process the input data (e.g., `"Extract the names, latitudes, and longitudes of public transport stations"`).
+    #### **2. code_writer** (Generate a single, efficient script)
+    - Used for writing **one** optimized script that performs multiple tasks.
+    - **Arguments:**
+    - `language`: The programming language to use (default to `"python"`).
+    - `requirements`: A clear description of what the code should accomplish.
+    - `context`: Any **necessary input data, constraints, or dependencies**.
+    - `input_files`: A list of files required for the script.
+    - `output_files`: A list of expected output files.
 
-    Return a JSON array of tasks where each task has:
-    1. A descriptive `task_type` (one of the above).
-    2. A unique integer `id` (0, 1, 2, ...).
-    3. `dep`: An array of task IDs that must complete before this one (empty if no dependencies).
-    4. `args`: A dictionary of task-specific arguments as described above.
+    #### **3. search_web** (Retrieve external information)
+    - Used when information retrieval is necessary.
+    - **Arguments:**
+    - `query`: The specific web search to perform.
+    - `focus_area`: The domain of interest (e.g., `"urban planning"`, `"environmental data"`).
+    - `instructions`: How to **process** the search result using LLM (e.g., `"Extract the names and coordinates of metro stations"`).
 
-    Example format:
+    ---
+
+    ### **Task Dependencies & Efficiency Rules**
+    - **Minimize redundant `code_writer` calls**: Instead of multiple code-writing steps, generate a **single Python script** that:
+    - Reads all required files.
+    - Processes data as needed.
+    - Outputs all final results.
+    - **Tasks should be dependent only when necessary.** Use the minimum number of dependencies to maximize efficiency.
+    - **A task can have multiple dependencies** (e.g., the output of two different tasks can be combined as input for another task).
+    - **Ensure outputs are reusable** to avoid unnecessary recomputation.
+
+    ---
+
+    ### **Example JSON Output**
+    Return a structured JSON list where each task has:
+    1. A descriptive `"task_type"` (one of the above).
+    2. A unique integer `"id"` (e.g., `0, 1, 2, ...`).
+    3. A `"dep"` array specifying which tasks must complete before this one.
+    4. An `"args"` dictionary with task-specific arguments.
+
+    ```json
     [
         {{
             "task_type": "file_io",
@@ -63,32 +86,52 @@ def router(state: State):
             "dep": [],
             "args": {{
                 "operation": "read",
-                "file_path": "data/input.csv"
+                "file_path": "data/city_traffic.csv"
             }}
         }},
         {{
-            "task_type": "llm_extraction",
+            "task_type": "file_io",
             "id": 1,
-            "dep": [0],
+            "dep": [],
             "args": {{
-                "input": "Raw data from task 0",
-                "instructions": "Extract relevant columns and clean the data"
+                "operation": "read",
+                "file_path": "data/road_network.geojson"
+            }}
+        }},
+        {{
+            "task_type": "search_web",
+            "id": 2,
+            "dep": [],
+            "args": {{
+                "query": "Current public transport stations in San Francisco",
+                "focus_area": "city planning",
+                "instructions": "Extract the names, latitudes, and longitudes of all public transport stations."
             }}
         }},
         {{
             "task_type": "code_writer",
-            "id": 2,
-            "dep": [1],
+            "id": 3,
+            "dep": [0, 1, 2],
             "args": {{
                 "language": "python",
-                "requirements": "Calculate averages and generate a summary report",
-                "context": "Use the cleaned data from task 1"
+                "requirements": "Analyze congestion hotspots, generate public transport accessibility zones, and determine underserved areas in one script.",
+                "context": "Use GeoPandas for spatial analysis and overlay congestion data onto road networks. Compare areas with high congestion to public transport buffer zones to identify underserved regions.",
+                "input_files": ["data/city_traffic.csv", "data/road_network.geojson", "transport_stations.json"],
+                "output_files": ["output/congestion_hotspots.geojson", "output/underserved_areas.geojson"]
+            }}
+        }},
+        {{
+            "task_type": "file_io",
+            "id": 4,
+            "dep": [3],
+            "args": {{
+                "operation": "write",
+                "file_path": "output/underserved_areas.geojson",
+                "content": "Results from Task 3"
             }}
         }}
-    ]
+    ]```
 
-    Ensure tasks are logically sequenced and dependencies are correctly specified to produce the desired result.
-    Return only valid, executable JSON.
     """
 
     # Invoke LLM to generate structured tasks
@@ -116,29 +159,3 @@ def router(state: State):
         }]
     }
 
-
-
-
-# TEST SCRIPT 
-
-test_inputs = [
-    "Search for public transport stations near cambridge massachusetts, extract their names and coordinates, and generate a map visualizing their locations.",
-    #"Compare land use data from two different years (stored in separate shapefiles) and identify areas where land use has changed."
-]
-
-def test_router():
-    for i, user_input in enumerate(test_inputs, 1):
-        print(f"\n **Test Case {i}:** {user_input}")
-        
-        # Mocking state format expected by router function
-        state = {"messages": [{"role": "user", "content": user_input}]}
-
-        # Call the router function
-        result = router(state)
-
-        # Pretty-print JSON output
-        print("🔍 **Decomposed Tasks:**")
-        print(json.dumps(result, indent=4))
-
-# Run the test
-test_router()

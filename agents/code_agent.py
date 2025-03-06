@@ -52,7 +52,9 @@ llm = ChatOpenAI(model="gpt-4-turbo", api_key=API_KEYS["openai"])
 
 def code_writer(state: State):
     user_message = state["messages"][-1]["content"]
-    
+    language = state["task_args"]["language"]
+    requirements = state["task_args"]["requirements"]
+    dep = state["dep_results"]
     # Prompt Formatting
     prompt = f"""
     You are a Python function generator specialized in geospatial data processing.
@@ -67,9 +69,9 @@ def code_writer(state: State):
     Never generate responses outside this documentation.
     Create a Python function that **returns the final result instead of printing it**.
 
-    Analyze the user request below and provide Python function code back:
+    Analyze the user request below and provide function code back:
 
-    **Request:** "{user_message}"
+    **Request:** "{user_message}" using {language} with the requirement {requirements} given the information {dep}
     """
 
     # Get Response from LLM

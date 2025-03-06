@@ -20,11 +20,6 @@ TASK_FUNCTIONS = {
     "llm_extraction": llm_extraction
 }
 
-def load_tasks(json_file):
-    """Load tasks from a JSON file."""
-    with open(json_file, "r") as f:
-        tasks = json.load(f)
-    return tasks
 
 def build_dependency_graph(tasks):
     """
@@ -34,6 +29,7 @@ def build_dependency_graph(tasks):
         - in_degree: {task_id: number_of_dependencies}
         - task_map: {task_id: task_data}
     """
+    print(tasks)
     graph = defaultdict(list)
     in_degree = {}
     task_map = {}
@@ -76,15 +72,13 @@ def execute_tasks(sorted_task_ids, task_map):
     Each task receives its own 'args' plus outputs from its dependencies.
     """
     # Initialize shared state that will be updated after each task
-    state = {
-        "messages": [],
-        "task_type": None,
-        "file_results": None,
-        "code_results": None,
-        "search_results": None,
-        "llm_results": None,
-        "task_args": None
+    state: State = {
+    "messages": [],
+    "task_type": None,  # Default task type (can be changed later)
+    "task_args": {},  # Empty dictionary (will be populated based on the task type)
+    "dep_results": []  # Empty list for storing dependency results
     }
+
     
     
     results: Dict[int, Any] = {}  # Store all task results by task_id    
@@ -93,14 +87,14 @@ def execute_tasks(sorted_task_ids, task_map):
         task = task_map[task_id]
         task_type = task["task_type"]
         
-        # Update the task_type in state
+        # update state task_type 
         state["task_type"] = task_type
         
-        # Retrieve the base message list
+        # update state messages
         messages = task.get("messages", [])
         state["messages"] = messages
         
-        # Prepare task_args based on task type
+        # update state task_args
         if task_type == "file_io":
             task_args = {
                 "operation": task.get("args", {}).get("operation"),
@@ -125,25 +119,30 @@ def execute_tasks(sorted_task_ids, task_map):
                 
         elif task_type == "search_web":
             task_args = {
-                "focus_area": task.get("args", {}).get("focus_area")
+                "focus_area": task.get("args", {}).get("focus_area"), 
+                "instructions": task.get("args", {}).get('instructions')
             }
             
             # Append "query" to messages if provided
             query = task.get("args", {}).get("query", "")
             if query:
                 state["messages"].append(query)
+            
         
         elif task_type == "llm_extraction":
             task_args = {
                 "instructions": task.get("args", {}).get("instructions", "")
             }
-        else:
-            print(f"Unknown task type: {task_type}")
-            results[task_id] = None
-            continue
+
             
         # Update task_args in state
         state["task_args"] = task_args
+        
+        # update dep-results in state
+        for index in task["dep"]:        
+            state["dep_results"].append(results[index])
+            
+
         
         print(f"\nExecuting Task {task_id} ({task_type}) with state: {state}")
         
@@ -155,29 +154,18 @@ def execute_tasks(sorted_task_ids, task_map):
             continue
             
         try:
-            # Call the task function with the state object
             result = func(state)
             results[task_id] = result
             print(f"Task {task_id} result: {result}")
-            
-            # Update the appropriate result field in state for the next iteration
-            if task_type == "file_io":
-                state["file_results"] = result
-            elif task_type == "code_writer":
-                state["code_results"] = result
-            elif task_type == "search_web":
-                state["search_results"] = result
-            elif task_type == "llm_extraction":
-                state['llm_results'] = result                
+                      
         except Exception as e:
             print(f"Error executing task {task_id}: {str(e)}")
             results[task_id] = None
     
     return results
 
-def main(json_file):
-    tasks = load_tasks(json_file)
-    graph, in_degree, task_map = build_dependency_graph(tasks)
+def main(tasks):
+    graph, in_degree, task_map = build_dependency_graph(tasks['tasks'])
     sorted_task_ids = topological_sort(graph, in_degree)
     
     print("Execution Order:", sorted_task_ids)
