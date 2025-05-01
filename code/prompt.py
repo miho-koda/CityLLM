@@ -253,6 +253,20 @@ I'm looking to open a family entertainment center,
 ZEROSHOT_REACT_INSTRUCTION = """
 Analyze zones and POIs using interleaving 'Thought', 'Action', and 'Observation' steps. Ensure you gather valid information about zones, POIs, parking, spending patterns, and transportation. All information should be written in Notebook, which will then be input into the Analyzer tool. Note that nested use of tools is prohibited. 'Thought' can reason about the current situation, and 'Action' can use any of the available functions:
 
+## Overall Task:
+You are tasked with analyzing zones and points of interest (POIs) by interleaving the following steps:
+- Thought (reason about what to do next)
+- Action (choose and call exactly one function)
+- Observation (record what you learned)
+
+⚡ Important:
+- Each Action must call exactly one function at a time.
+- After every Action, you must wait for an Observation before proceeding.
+- Nested tool calls are strictly prohibited.
+- You can reference results from previous actions for chaining operations.
+---
+
+
 You have access to the following functions as tools. Each tool has a specific format, description, and example. You can use the provided functions to generate code.
     (6) filter_pois_by_top_category(poi_spend_df, top_category):
     Description: Filters POIs to only include those that match the specified top-level category.
@@ -349,8 +363,31 @@ You have access to the following functions as tools. Each tool has a specific fo
     - poi_type: A string representing the type of transport POI. Options: "bus_stop", "station", "subway_entrance", "aerodrome", "taxi".
     Returns: A dictionary of zone_id as keys and list of (latitude, longitude) tuples representing matched POIs inside the zone. dictionary: {{zone_id: [(lat, lon), ...]}}
     Example: get_transport_pois_in_zone(zone_df, poi_df, "subway_entrance") returns coordinates of subway entrances in all zones.
+    
+    (17) self_defined_logic(code):
+    Description: Executes custom Python code to manipulate previous action outputs and predefined datasets.
 
-Here is the documentation for the DataFrames you will be working with:
+    Parameters:
+    - code: A multi-line Python string.
+    - You may reference:
+        - Previous Action results using $action1, $action2, etc.
+        - Predefined DataFrames: poi_spend_df, parking_df, and zone_df.
+    - Your code must assign a variable called `result`, which will be returned as output.
+    - You may not import external libraries (e.g., pandas, math).
+    - You may not call external tools inside the action_function (only operate on existing data).
+
+    Returns:
+    - The value of `result` after executing the code.
+
+    Example:
+    action_function[
+        '''
+        filtered_df = $action2[$action2['competitor_count'] < 3]
+        merged_df = filtered_df.merge(poi_spend_df, on='zone_id', how='left')
+        result = merged_df
+        '''
+]
+    Here is the documentation for the DataFrames you will be working with:
         ## DataFrame Documentation
 
         ### `poi_spend_df`
@@ -411,28 +448,94 @@ Here is the documentation for the DataFrames you will be working with:
 
         ---
 
+## Action Rules:
+- Every Action must use the format: function_name[arg1, arg2, ...]
+- After each Action, you must explicitly state:
+    - Needs Loop Over Zones: Yes or No
+    - Threshold: [operator] [value]
+- If an action requires zone_id as input but you want to loop through all zones, then you should put -1 as zone_id
+- get_zone_center, get_distance_km, get_neighbor_zones, get_population, get_transport_pois_in_zone, self_defined_logic are special functions.
+- You are only allowed to use the Threshold feature if the function you are using is NOT a special function.
+- Even if no threshold constraint applies or if the function is a special function, **do not omit the Threshold line**.
+    - If no threshold constraint applies or if the function is a special function, set it as: `Threshold: [None] [None]`
+
+
+- Only one function per Action. No combining tools.
+- Always follow the Thought → Action → Observation sequence.
+- Never perform multiple Actions in a row.
+
+CRITICAL: When operations need to build on results from previous actions:
+1. Use $action<n> to reference the result from Action n (e.g., $action1, $action2)
+2. This allows chaining operations on previously computed results
+
+Example for chained filtering:
+    Action 1: filter_pois_by_top_category[poi_spend_df, "Other Schools and Instruction"]
+    Needs Loop Over Zones: No
+    Threshold: [None] [None]
+
+    Action 2: filter_pois_by_sub_category[$action1, "Exam Preparation and Tutoring"]
+    Needs Loop Over Zones: No
+    Threshold: [None] [None]
+
+---## Data Chaining Guidelines:
+
+When working with complex queries that require sequential operations:
+1. Identify dependencies between operations
+2. Use previous action results in subsequent actions
+3. Build your analysis incrementally
+
+
+## 🚨 Important Clarification about Looping:
+
+When the user query involves **finding specific zones** that satisfy a condition (for example:  
+"zones with parking lots larger than 12,000 square meters" or "zones with at least 10 parking spaces"),  
+you **must loop over each zone individually**.
+
+- set: `Needs Loop Over Zones: Yes`
+- Even if a function can compute a global statistic across the whole dataset, you must apply it **zone-by-zone**.
 
 Important Rules:
 - You already have access to poi_spend_df, parking_df, zone_df
 - Each Action must use exactly one of the available functions once.
-- After every Thought, output exactly ONE Action.
 - After every Action, wait for the Observation before writing the next Thought.
-- After every Action, you must explicitly state:
-        Needs Loop Over Zones: Yes or Needs Loop Over Zones: No.
+- Action: function_name[arg1, arg2, ...] Threshold: operator value
+        - After every Action, you must explicitly state:
+        Needs Loop Over Zones: Yes or Needs Loop Over Zones: No. Threshold: >= 200
         If the function needs to operate over each individual zone (such as filtering or retrieving zone-specific information), say Yes.
         If the function is a general aggregation or returns a full dataset without zone-specific filtering, say No.
         Example: 
                 Action 3: filter_df_based_on_zone[parking_df, 101]
-                Needs Loop Over Zones: Yes
+                Needs Loop Over Zones: Yes Threshold: >= 200
+        - If no threshold constraint applies, you may omit the Threshold but you can not omit the Needs Loop Over Zones.
+Always output your Action exactly in this format.
+
 - Do not write multiple Actions in a row. Always follow the pattern: Thought → Action → Observation → Thought → Action → Observation → ...
 
 Note that nested use of tools is prohibited. 'Thought' can reason about the current situation, and 'Action' can use any of the available functions:
 
 
+## Finishing Instructions:
+- As soon as you find zones satisfying the query, immediately Finish:
+    Finish[x, y, z]
 
+- If no zones satisfy the query:
+    Finish[None]
 
-Each action only calls one function once. Do not add any description in the action.
-Even if a function has no arguments, you must still call it using empty square brackets, e.g., get_parking_dataset[].
+- If your analysis is general (not returning specific zones):
+    Finish[Analysis complete: <summary>]
+
+⚡ Do not continue searching after finding valid results.
+⚡ Always stop immediately after finishing the required task.
+
+---
+
+## Summary:
+- One Action = one function call only
+- No nested or multi-tool actions
+- Must alternate: Thought → Action → Observation
+- Must clearly note if looping over zones
+- Always Finish immediately after reaching a conclusion
+Remember: Your goal is to answer the query efficiently. Do not perform unnecessary steps after finding the answer.
 
 Query: {query}{scratchpad}"""
 

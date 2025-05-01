@@ -399,7 +399,6 @@ medium_1 = [
     "Analyze zones where raw total spend from 2020 to 2022 exceeded $18 million.",
     "Can you find districts that had more than 500,000 transactions from 2019 through 2021?",
     "I want to look at zones where the number of customers from 2021 to 2024 went beyond 300,000.",
-            
 ]
 
 medium_2 = [
@@ -764,79 +763,5 @@ for router_function, model_id in routers_and_models:
         run_all_prompts(eval(f"hard_{i}"), f"/Users/mihokoda/Desktop/CityLLM/test_results/hard/{i}", router_function, model_id)
 
 ##########################################################################################################################
-
-
-
-
-
-# import os
-# import pandas as pd
-# import os
-# import pandas as pd
-
-# def collect_prompts_from_test_cases(csv_path, base_dir):
-#     """
-#     Collects prompts from test case folders based on a CSV file and records their directory paths.
-    
-#     Args:
-#         csv_path: Path to the CSV file containing test_case column
-#         base_dir: Base directory containing sim/med/hard folders
-        
-#     Returns:
-#         A list of tuples containing (directory_path, prompt_text)
-#     """
-#     # Read the CSV file
-#     df = pd.read_csv(csv_path)
-    
-#     # Verify test_case column exists
-#     if 'test_case' not in df.columns:
-#         raise ValueError("CSV file must contain a 'test_case' column")
-    
-#     # Initialize list to store results
-#     prompt_data = []
-    
-#     # Process each test case
-#     for test_case in df['test_case']:
-#         # Parse test case components
-#         parts = test_case.split('_')
-#         if len(parts) != 4:
-#             print(f"Skipping malformed test case: {test_case}")
-#             continue
-            
-#         difficulty, i, j = parts[1], parts[2], parts[3]
-        
-#         # Construct the directory path
-#         dir_path = os.path.join(
-#             base_dir,
-#             difficulty,  # sim/med/hard
-#             i,          # the i number (1 to n)
-#             test_case   # tc_{difficulty}_{i}_{j}
-#         )
-        
-#         # Construct the full path to prompt.txt
-#         prompt_path = os.path.join(dir_path, 'prompt.txt')
-        
-#         # Read the prompt if it exists
-#         try:
-#             with open(prompt_path, 'r') as f:
-#                 prompt_text = f.read().strip()
-#             prompt_data.append((dir_path, prompt_text))
-#         except FileNotFoundError:
-#             print(f"Prompt not found at: {prompt_path}")
-#             prompt_data.append((dir_path, None))
-#         except Exception as e:
-#             print(f"Error reading prompt at {prompt_path}: {str(e)}")
-#             prompt_data.append((dir_path, None))
-    
-#     return prompt_data
-
-
-# csv_path = "/Users/mihokoda/Desktop/untitled folder/filtered_test_cases_updated.csv"
-# base_dir = "/Users/mihokoda/Desktop/CityLLM/test_results/"
-# prompts = collect_prompts_from_test_cases(csv_path, base_dir)
-
-
-
-
 
 

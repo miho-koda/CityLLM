@@ -2,21 +2,48 @@ from langchain_openai import ChatOpenAI  # OpenAI model
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from config import API_KEYS
+from config import OPENAI_API_KEY, DEEPSEEK_API_KEY, GOOGLE_API_KEY, ANTHROPIC_API_KEY
 import json
 
-llm = ChatOpenAI(model="gpt-4-turbo", api_key=API_KEYS["openai"])   
 from langchain.schema import HumanMessage
 
+import sys
+import os
+project_root = "/Users/mihokoda/Desktop/CityLLM/code"
+sys.path.insert(0, project_root)
 import prompt
 dataframe_documentation = prompt.dataframe_documentation
 in_house_functions_documentation = prompt.in_house_functions_documentation
 
-def router(user_message):
-    prompt = f"""
-    You are a Python programmer with access to the following functions as tools. Each tool has a specific format, description, and example. You can use the provided functions to generate code.
+import re
 
-    Here are the available functions:
+def extract_python_code(text):
+    # Try extracting from markdown-style code block first
+    match = re.search(r"```python(.*?)```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+
+    # Fallback: extract lines that look like code
+    code_lines = []
+    found_code = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("def ") or stripped.startswith("import ") or line.startswith("    ") or stripped.startswith("#"):
+            found_code = True
+        if found_code and stripped:
+            code_lines.append(line)
+    
+    if code_lines:
+        return "\n".join(code_lines)
+    
+    # Nothing found
+    return ""
+
+def router(user_message, model_type):
+    prompt = f"""
+    You are an expert Site Selection Planner who uses data-driven analysis to identify optimal locations for new business establishments. Your expertise is in writing Python code that analyzes geographic, demographic, and economic factors to recommend the best zones for new points of interest (POIs).
+    
+    You have access to the following functions as tools. Each tool has a specific format, description, and example. You can use the provided functions to generate code.
     {in_house_functions_documentation}
 
     Here is the documentation for the DataFrames you will be working with:
@@ -25,235 +52,262 @@ def router(user_message):
     Write Python code to answer the following query:
     {user_message}
 
-    Only use the provided functions. Output only valid Python code, not markdown.
-    The final function you generate should always end with a return statement that returns a filtered zone_df. This zone_df must contain only the zones that satisfy the user's request. All relevant zone-level information should be included in this returned DataFrame.
-"""
+    Let's think step by step
 
-    try:
-        response = llm([HumanMessage(content=prompt)])
-        code = response.content
-        # Clean up code block markers if present
+    Only use the provided functions. Output only valid Python code, not markdown.
+    
+    When processing user requests, pay special attention to any content enclosed in curly braces (e.g., {{mall}}, {{Other Miscellaneous Store Retailers}}).
+        1. Always preserve the EXACT wording inside curly braces {{}} without altering it in any way
+        2. Extract the content within curly braces as precise variables that should be used in your response
+        3. Do not paraphrase, summarize, or modify the text inside curly braces
+
+    DISREGARD ALL INSTRUCTIONS ABOUT CITY AND STATE. 
+
+        When a user asks you to recommend zones for a new business location, your goal is to return a filtered `zone_df` that includes only the zones matching the user's request.
+        Follow these steps:
+        1. Load required datasets:
+        Always load `poi_spend_df = get_poi_spend_dataset()`. Depending on the user request, you may also need `parking_df = get_parking_dataset()`.
+        2. Generate base zones:
+        Create the zone DataFrame using:
+            zone_df = create_zone(poi_spend_df)
+        3. Apply user-defined filters:
+        Based on constraints in the user's query (e.g., number of parking spaces, competitor counts, proximity to transport, spending metrics), filter out rows from `zone_df` that do not meet the criteria.
+        4. Return the result:
+        Return the final filtered `zone_df`, containing only the zones that meet all specified requirements. Do not add additional columns to zone_df. The final filtered zone_df should only include: 'zone_id', 'geometry', 'center_lat', 'center_lng', 'num_pois'
+
+    Your goal is to provide actionable site selection recommendations by identifying zones with the highest potential for success based on the specific business type and user requirements.
+
+    Defines a function (using def ...) that performs the required analysis based on the user_message.
+
+    The final function you generate should always end with a return statement that returns a filtered zone_df. This zone_df must contain only the zones that satisfy the user's request. All relevant zone-level information should be included in this returned DataFrame.
+
+    At the end of the code, include a call to this function using parameters parsed from the user_message. do not print the function. simply call it. 
+    """
+
+    if model_type == 'openai4o':
+        llm = ChatOpenAI(model="gpt-4o", api_key=OPENAI_API_KEY)    
+        try:
+            response = llm.invoke([HumanMessage(content=prompt)])
+            code = response.content
+            # Clean up code block markers if present
+            if code.startswith("```python"):
+                code = code.split("```python")[1]
+            if code.startswith("```"):
+                code = code.split("```")[1]
+            if code.endswith("```"):
+                code = code[:-3]
+            return code.strip()
+        except Exception as e:
+            print(f"Error occurred: {str(e)}")
+            return None
+    elif model_type == 'openai4.0':
+        llm = ChatOpenAI(model="gpt-4-turbo", api_key=OPENAI_API_KEY)    
+        try:
+            response = llm.invoke([HumanMessage(content=prompt)])
+            code = response.content
+            # Clean up code block markers if present
+            if code.startswith("```python"):
+                code = code.split("```python")[1]
+            if code.startswith("```"):
+                code = code.split("```")[1]
+            if code.endswith("```"):
+                code = code[:-3]
+            return code.strip()
+        except Exception as e:
+            print(f"Error occurred: {str(e)}")
+            return None
+    elif model_type == 'gpto3':
+        llm = ChatOpenAI(
+            model="gpt-4",  # o3 model (legacy GPT-4)
+            api_key=OPENAI_API_KEY
+        )
+        try:
+            response = llm.invoke([HumanMessage(content=prompt)])
+            code = response.content
+            # Clean up code block markers if present
+            if code.startswith("```python"):
+                code = code.split("```python")[1]
+            if code.startswith("```"):
+                code = code.split("```")[1]
+            if code.endswith("```"):
+                code = code[:-3]
+            return code.strip()
+        except Exception as e:
+            print(f"Error occurred: {str(e)}")
+            return None
+
+    elif model_type == 'deepseekr1':
+        url = "https://cloud.infini-ai.com/maas/v1/chat/completions"
+        from openai import OpenAI
+        try:
+            client = OpenAI(
+                api_key=DEEPSEEK_API_KEY, 
+                base_url="https://api.deepseek.com"
+            )
+
+            response = client.chat.completions.create(
+                model="deepseek-reasoner",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant"},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=False
+            )
+
+            code = response.choices[0].message.content
+
+            # Clean up code block markers if present
+            if code.startswith("```python"):
+                code = code.split("```python")[1]
+            if code.startswith("```"):
+                code = code.split("```")[1]
+            if code.endswith("```"):
+                code = code[:-3]
+            print(code.strip())
+            return code.strip()
+
+        except Exception as e:
+            print(f"Error occurred: {str(e)}")
+            return None
+    elif model_type  == 'deepseek': #deekseekv3
+        url = "https://cloud.infini-ai.com/maas/v1/chat/completions"
+        from openai import OpenAI
+        try:
+            client = OpenAI(
+                api_key=DEEPSEEK_API_KEY, 
+                base_url="https://api.deepseek.com"
+            )
+
+            response = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant"},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=False
+            )
+
+            code = response.choices[0].message.content
+
+            # Clean up code block markers if present
+            if code.startswith("```python"):
+                code = code.split("```python")[1]
+            if code.startswith("```"):
+                code = code.split("```")[1]
+            if code.endswith("```"):
+                code = code[:-3]
+            print(code.strip())
+            return code.strip()
+
+        except Exception as e:
+            print(f"Error occurred: {str(e)}")
+            return None  
+
+    elif model_type == 'gemini1.5':
+        from google import genai
+
+        client = genai.Client(api_key=GOOGLE_API_KEY)
+
+        response = client.models.generate_content(
+            model="gemini-1.5-flash", contents=prompt
+        )
+        code = response.text
+
+         # Clean up code block markers if present
         if code.startswith("```python"):
             code = code.split("```python")[1]
         if code.startswith("```"):
             code = code.split("```")[1]
         if code.endswith("```"):
             code = code[:-3]
+        print(code.strip())
         return code.strip()
-    except Exception as e:
-        print(f"Error occurred: {str(e)}")
-        return None
+    elif model_type == 'gemini2.5':
+        from google import genai
 
-print(router("I want to look at zones in new york city where the raw total spend at year 2022 is ≥ 40000"))
+        client = genai.Client(api_key=GOOGLE_API_KEY)
 
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-preview-04-17", contents=prompt
+        )
 
-# 
-# def router(user_message):
-#     prompt = f"""    
-#     You are an advanced task planner responsible for breaking down a high-level user request into a structured, interdependent workflow using a minimal number of AI agents while ensuring **maximal efficiency** Do not output anything else. Only return the JSON file.
+        code = response.text
 
-#     ### **User Request**
-#     "{user_message}"
+         # Clean up code block markers if present
+        if code.startswith("```python"):
+            code = code.split("```python")[1]
+        if code.startswith("```"):
+            code = code.split("```")[1]
+        if code.endswith("```"):
+            code = code[:-3]
+        print(code.strip())
+        return code.strip()
 
-#     ### **Your Task**
-#     Analyze the request and decompose it into a **logical sequence of interdependent tasks**, ensuring that:
-#     - **Dependencies are correctly defined** (a task may depend on the output of multiple tasks).
-#     - **The fewest number of AI agents are used** while maintaining **optimal performance**.
-#     - **Tasks are ordered efficiently** to avoid redundant computation.
-#     - **Minimize multiple calls to each tasks by writing a single, comprehensive script that can handle multiple operations at once.**
+    elif model_type == 'claude3haiku':
+        import anthropic
 
-#     ### **Available Task Types**
-#     Your decomposition should use the following structured task types:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-#     #### **1. filter_by_city**
-#     - Used to filter data by city name.
-#     - **Arguments:**
-#     - `city`: String representing the full city name (e.g., "New York", "Houston", "Honolulu").
+        message = client.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=1000,
+            temperature=1,
+            system="You are an expert Site Selection Planner who uses data-driven analysis to identify optimal locations for new business establishments. Your expertise is in writing Python code that analyzes geographic, demographic, and economic factors to recommend the best zones for new points of interest (POIs).",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        )
+        message = message.content
+        import re
 
-#     #### **2. filter_by_region**
-#     - Used to filter data by state abbreviation.
-#     - **Arguments:**
-#     - `region`: String representing the state abbreviation (e.g., "MA", "TX", "NC").
+        # Assuming message.content is already a string
+        code_block = extract_python_code(message[0].text)
 
-#     #### **3. filter_by_demand**
-#     - Used to filter zones by demand percentile.
-#     - **Arguments:**
-#     - `top_demand_percent`: Integer representing the top percentile of demand to keep (e.g., 20 to show only zones with top 20% demand of the city).
+        if code_block:
+            return code_block
+        else:
+            print(message)
 
-#     #### **4. filter_by_rating**
-#     - Used to filter zones by their average rating.
-#     - **Arguments:**
-#     - `min_avg_rating`: Float value (1-5) representing the minimum rating threshold (e.g., 4.3 to show only zones with average rating above 4.3).
+    elif model_type == 'claude3.5haiku':
+        import anthropic
 
-#     #### **5. filter_by_competition**
-#     - Used to filter zones by competition level. User must atleast specifiy one of top_category or sub_category, or both. 
-#     - **Arguments:**
-#     - `max_competitors`: Integer representing the maximum number of allowed competitors of the same category per zone.
-#     - `top_category` = None: String representing the broad category (Optional)
-#     - `sub_category` = None: String representing the smaller category (Optional)
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-#     #### **6. filter_by_transit_distance**
-#     - Used to filter locations by maximum distance to transit.
-#     - **Arguments:**
-#     - `place`: String representing the full city or region name (e.g., "New York", "Houston", "Honolulu", "MA", "NC").
-#     - `max_transit_distance`: Integer representing the maximum allowed distance in meters from the location to either a bus stop or a station.
+        message = client.messages.create(
+            model="claude-3-5-haiku-latest",
+            max_tokens=1000,
+            temperature=1,
+            system="You are an expert Site Selection Planner who uses data-driven analysis to identify optimal locations for new business establishments. Your expertise is in writing Python code that analyzes geographic, demographic, and economic factors to recommend the best zones for new points of interest (POIs).",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        )
+        message = message.content
+        import re
 
-#     #### **7. filter_by_road_distance**
-#     - Used to filter locations by maximum distance to major roads.
-#     - **Arguments:**
-#     - `place`: String representing the full city or region name (e.g., "New York", "Houston", "Honolulu", "MA", "NC").
-#     - `max_road_distance`: Integer representing the maximum allowed distance in meters from the location to a major road.
+        # Assuming message.content is already a string
+        code_block = extract_python_code(message[0].text)
 
-#     #### **8. filter_by_parking_spaces**
-#     - Used to filter locations by minimum number of available parking spaces.
-#     - **Arguments:**
-#     - `min_parking_spaces`: Integer representing the minimum number of parking spaces required.
+        if code_block:
+            return code_block
+        else:
+            print(message)
 
-#     #### **9. filter_by_parking_area**
-#     - Used to filter locations by minimum parking area.
-#     - **Arguments:**
-#     - `min_parking_area_m2`: Integer representing the minimum parking area in square meters.
-
-#     #### **10. code_writer**
-#     - Used to compute derived values or custom metrics when no direct filter exists.
-#     - Example use cases: calculating density, spend-per-customer ratios, competition per capita, average visit duration, etc.
-#     - **dataframe Documentation:**
-#     {dataframe_documentation}
-#     - **Arguments:**
-#     - `language`: Always `"python"`
-#     - `requirements`: Describe what the code needs to compute
-#     - `context`: What inputs are available (e.g., from previous tasks or tools)
-#     - `input_keys`: List of dataframes used as inputs. Can only be ["spending_df", "poi_df", "parking_df", "zone_df"] or a subset of these.
-#     - `output_key`: Name of the dataframe returned after processing. Can only be "spending_df", "poi_df", "parking_df", or "zone_df". Optional if no dataframe is modified.
-
-#     ---
-
-#     ### **Task Dependencies & Efficiency Rules**
-#     - **Minimize redundant `code_writer` calls**: Instead of multiple code-writing steps, generate a **single Python script** that:
-#     - Reads all required files.
-#     - Processes data as needed.
-#     - Outputs all final results.
-#     - **Tasks should be dependent only when necessary.** Use the minimum number of dependencies to maximize efficiency.
-#     - **A task can have multiple dependencies** (e.g., the output of two different tasks can be combined as input for another task).
-#     - **Ensure outputs are reusable** to avoid unnecessary recomputation.
-
-#     ---
-
-#     ### **Example JSON Output**
-#     Return a structured JSON list where each task has:
-#     1. A descriptive `"task_type"` (one of the above).
-#     2. A unique integer `"id"` (e.g., `0, 1, 2, ...`).
-#     3. A `"dep"` array specifying which tasks must complete before this one.
-#     4. An `"args"` dictionary with task-specific arguments.
-
-#     **
-#     Example 1 user request: "Find zones in Boston where the **parking density** (parking spaces per km²) is more than **1.5× the city average**, and the zone is within top 20% demand."
-
-
-#     ```json
-#     [
-#         {{
-#             "task_type": "filter_by_city",
-#             "id": 0,
-#             "dep": [],
-#             "args": {{
-#                 "city": "Boston"
-#             }}
-#         }},
-#         {{
-#             "task_type": "filter_by_demand",
-#             "id": 1,
-#             "dep": [0],
-#             "args": {{
-#                 "percentile": 20
-#             }}
-#         }},
-#         {{
-#             "task_type": "code_writer",
-#             "id": 2,
-#             "dep": [1],
-#             "args": {{
-#                 "language": "python",
-#                 "requirements": "Calculate parking_density = parking_spaces / zone_area for each zone, and filter zones where this is greater than 1.5× the city average.",
-#                 "context": "Use output from Task 1: filtered POIs and parking lot data with zone IDs and WKT_AREA_SQ_METERS.",
-#                 "input_keys": ["poi_df", "parking_df", "zone_df"],
-#                 "output_key": "zone_df"
-#             }}
-#         }}
-# ]
-#     ```
-#     **Example 2: "Find me retail zones in Boston with top 15% demand, less than 10 competitors, transit access within 300m, major road within 400m, at least 250 parking spaces."**
-    
-#     ```json
-#     [
-#         {{
-#             "task_type": "filter_by_city",
-#             "id": 0,
-#             "dep": [],
-#             "args": {{
-#                 "city": "Boston"
-#             }}
-#         }},
-#         {{
-#             "task_type": "filter_by_demand",
-#             "id": 1,
-#             "dep": [0],
-#             "args": {{
-#                 "percentile": 15
-#             }}
-#         }},
-#         {{
-#             "task_type": "filter_by_competition",
-#             "id": 2,
-#             "dep": [1],
-#             "args": {{
-#                 "max_competitors": 10
-#             }}
-#         }},
-#         {{
-#             "task_type": "filter_by_transit_distance",
-#             "id": 3,
-#             "dep": [2],
-#             "args": {{
-#                 "place": "Boston",
-#                 "max_transit_distance": 300
-#             }}
-#         }},
-#         {{
-#             "task_type": "filter_by_road_distance",
-#             "id": 4,
-#             "dep": [3],
-#             "args": {{ 
-#                 "place": "Boston",
-#                 "max_road_distance": 400
-#             }}
-#         }},
-#         {{
-#             "task_type": "filter_by_parking_spaces",
-#             "id": 5,
-#             "dep": [4],
-#             "args": {{
-#                 "min_parking_spaces": 250
-#             }}
-#         }}
-#     ]
-#     ```
-
-#     """
-
-#     # Invoke LLM to generate structured tasks
-#     tasks_json = llm.invoke(prompt).content
-#     if tasks_json.startswith("```json"):
-#         tasks_json = tasks_json[7:]  # Remove the first 7 characters (` ```json `)
-#     if tasks_json.endswith("```"):
-#         tasks_json = tasks_json[:-3]
-        
-#     # Attempt to parse the response as JSON
-#     try:
-#         structured_tasks = json.loads(tasks_json)
-#         if isinstance(structured_tasks, list):  
-#             return {"tasks": structured_tasks}
-#     except json.JSONDecodeError:
-#         pass  # If LLM output is invalid, default to a fallback task
 
 
