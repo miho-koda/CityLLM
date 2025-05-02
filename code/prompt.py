@@ -246,7 +246,6 @@ I'm looking to open a family entertainment center,
 '''
 
 
-
 ############################################################REACT######################################################################################
 # Prompt templates for POI/Zone Analysis Framework
 
@@ -359,14 +358,12 @@ You have access to the following functions as tools. Each tool has a specific fo
     Description: Returns transport-related POIs within the geometry of a given zone.
     Parameters:
     - zone_df: A GeoDataFrame containing zone geometries.
-    - poi_spend_df: DataFrame with REGION column
     - poi_type: A string representing the type of transport POI. Options: "bus_stop", "station", "subway_entrance", "aerodrome", "taxi".
     Returns: A dictionary of zone_id as keys and list of (latitude, longitude) tuples representing matched POIs inside the zone. dictionary: {{zone_id: [(lat, lon), ...]}}
     Example: get_transport_pois_in_zone(zone_df, poi_df, "subway_entrance") returns coordinates of subway entrances in all zones.
     
     (17) self_defined_logic(code):
     Description: Executes custom Python code to manipulate previous action outputs and predefined datasets.
-
     Parameters:
     - code: A multi-line Python string.
     - You may reference:
@@ -449,15 +446,16 @@ You have access to the following functions as tools. Each tool has a specific fo
         ---
 
 ## Action Rules:
-- Every Action must use the format: function_name[arg1, arg2, ...]
-- After each Action, you must explicitly state:
-    - Needs Loop Over Zones: Yes or No
-    - Threshold: [operator] [value]
+- Every Action must use the format: 
+function_name[arg1, arg2, ...]
+Needs Loop Over Zones: Yes or No
+Threshold: [operator] [value]
 - If an action requires zone_id as input but you want to loop through all zones, then you should put -1 as zone_id
-- get_zone_center, get_distance_km, get_neighbor_zones, get_population, get_transport_pois_in_zone, self_defined_logic are special functions.
-- You are only allowed to use the Threshold feature if the function you are using is NOT a special function.
-- Even if no threshold constraint applies or if the function is a special function, **do not omit the Threshold line**.
-    - If no threshold constraint applies or if the function is a special function, set it as: `Threshold: [None] [None]`
+- Threshold rules: 
+    - get_zone_center, get_distance_km, get_neighbor_zones, get_population, get_transport_pois_in_zone, self_defined_logic are special functions.
+    - You are only allowed to use the Threshold feature if the function you are using is NOT a special function.
+    - Even if no threshold constraint applies or if the function is a special function, **do not omit the Threshold line**.
+        - If no threshold constraint applies or if the function is a special function, set it as: `Threshold: [None] [None]`
 
 
 - Only one function per Action. No combining tools.
@@ -468,13 +466,17 @@ CRITICAL: When operations need to build on results from previous actions:
 1. Use $action<n> to reference the result from Action n (e.g., $action1, $action2)
 2. This allows chaining operations on previously computed results
 
-Example for chained filtering:
+Example for actions:
     Action 1: filter_pois_by_top_category[poi_spend_df, "Other Schools and Instruction"]
-    Needs Loop Over Zones: No
-    Threshold: [None] [None]
+    Needs Loop Over Zones: Yes
+    Threshold: >= 10
 
     Action 2: filter_pois_by_sub_category[$action1, "Exam Preparation and Tutoring"]
     Needs Loop Over Zones: No
+    Threshold: [None] [None]
+
+    Action 3: get_neighbor_zones(zone_df, -1, 4)
+    Needs Loop Over Zones: Yes
     Threshold: [None] [None]
 
 ---## Data Chaining Guidelines:
@@ -493,21 +495,6 @@ you **must loop over each zone individually**.
 
 - set: `Needs Loop Over Zones: Yes`
 - Even if a function can compute a global statistic across the whole dataset, you must apply it **zone-by-zone**.
-
-Important Rules:
-- You already have access to poi_spend_df, parking_df, zone_df
-- Each Action must use exactly one of the available functions once.
-- After every Action, wait for the Observation before writing the next Thought.
-- Action: function_name[arg1, arg2, ...] Threshold: operator value
-        - After every Action, you must explicitly state:
-        Needs Loop Over Zones: Yes or Needs Loop Over Zones: No. Threshold: >= 200
-        If the function needs to operate over each individual zone (such as filtering or retrieving zone-specific information), say Yes.
-        If the function is a general aggregation or returns a full dataset without zone-specific filtering, say No.
-        Example: 
-                Action 3: filter_df_based_on_zone[parking_df, 101]
-                Needs Loop Over Zones: Yes Threshold: >= 200
-        - If no threshold constraint applies, you may omit the Threshold but you can not omit the Needs Loop Over Zones.
-Always output your Action exactly in this format.
 
 - Do not write multiple Actions in a row. Always follow the pattern: Thought → Action → Observation → Thought → Action → Observation → ...
 
@@ -539,84 +526,6 @@ Remember: Your goal is to answer the query efficiently. Do not perform unnecessa
 
 Query: {query}{scratchpad}"""
 
-ANALYZER_INSTRUCTION = """You are a proficient zone analyzer. Based on the provided information and query, please analyze the zones and provide recommendations that match the query criteria. Your analysis should include specific metrics such as:
-
-- Zone characteristics (population, POI density, etc.)
-- Parking availability and capacity
-- Spending patterns and growth
-- Transportation accessibility
-- Competition analysis
-- Demographic insights
-
-Format your response in a clear, structured way with sections for:
-1. Zone Recommendations
-2. Key Metrics
-3. Competitive Analysis
-4. Growth Potential
-5. Risk Factors
-
-Given information: {text}
-Query: {query}
-Analysis:"""
-
-COT_ANALYZER_INSTRUCTION = """You are a proficient zone analyzer. Based on the provided information and query, let's analyze the zones step by step to find the best recommendations.
-
-Let's think through this systematically:
-1. First, understand the key requirements from the query
-2. Analyze zone characteristics and filter based on primary criteria
-3. Evaluate secondary factors like competition and growth
-4. Consider risks and limitations
-5. Compile final recommendations
-
-        "I’m looking for zones where 60% or more of the POIs fall within 300 meters of a station.",
-1. Zone Recommendations
-2. Key Metrics
-3. Competitive Analysis
-4. Growth Potential
-5. Risk Factors
-
-Given information: {text}
-Query: {query}
-Analysis: Let's think step by step..."""
-
-REACT_ANALYZER_INSTRUCTION = """You are a proficient zone analyzer. Based on the provided information and query, analyze zones by alternating between Thought, Action, and Observation steps. The 'Thought' phase involves reasoning about the current situation. The 'Action' phase can use two types of functions:
-
-
-Important Rules:
-- Each Action must use exactly one available function (MetricCalculation or Finish).
-- After each Thought, you must output exactly ONE Action.
-- After each Action, you must wait for an Observation before continuing with the next Thought.
-        #simple 15 “Find zones where {sub category/top category} accounts for the highest number of POIs.”
-
-The 'Thought' phase involves reasoning about the current situation. The 'Action' phase can use two types of functions:
-
-
-(1) MetricCalculation[Zone Details]: Calculate specific metrics for a zone
-(2) Finish[Final Analysis]: Complete the analysis with structured recommendations
-
-Format your final analysis with sections for:
-1. Zone Recommendations
-2. Key Metrics
-3. Competitive Analysis
-4. Growth Potential
-5. Risk Factors
-
-Given information: {text}
-Query: {query}{scratchpad}
-Even if a function has no arguments, you must still call it using empty square brackets, e.g., get_parking_dataset[].
-"""
-
-REFLECTION_HEADER = """You have attempted to analyze zones before and encountered issues. The following reflection(s) provide suggestions to avoid similar problems. Use them to improve your analysis strategy.
-
-"""
-
-REFLECT_INSTRUCTION = """You are an advanced reasoning agent that can improve based on self reflection. You will be given a previous analysis attempt where you had access to zone data and metrics but were unsuccessful in providing complete recommendations. Diagnose the reason for failure and devise a new approach that addresses the gaps.
-
-Given information: {text}
-Previous attempt:
-Query: {query}{scratchpad}
-
-Reflection:"""
 
 
 

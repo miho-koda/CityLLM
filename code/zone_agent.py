@@ -10,9 +10,10 @@ from langchain.chat_models import ChatOpenAI
 from langchain.schema import HumanMessage
 from prompt import (
     ZEROSHOT_REACT_INSTRUCTION,
-    COT_ANALYZER_INSTRUCTION,
-    REACT_ANALYZER_INSTRUCTION
+
 )
+import re
+import textwrap
 import numpy as np
 from langchain_openai import ChatOpenAI
 
@@ -59,9 +60,9 @@ class ZoneAgent:
         if self.mode == 'zero_shot':
             self.prompt_template = ZEROSHOT_REACT_INSTRUCTION
         elif self.mode == 'chain_of_thought':
-            self.prompt_template = COT_ANALYZER_INSTRUCTION
+            pass
         elif self.mode == 'react':
-            self.prompt_template = REACT_ANALYZER_INSTRUCTION
+            pass
         else:
             raise ValueError(f"Unknown mode: {mode}")
     
@@ -128,8 +129,22 @@ class ZoneAgent:
         # Now get the action specifically
         action = self._query_llm(force_action=True)
         if action.startswith('Finish['):
-            # Retry to get full Finish result without token limit
-            action = self._query_llm(force_finish_action=True)
+            # Instead of relying on the LLM to output all zones, check if we have existing data
+            # from the last action that contains a list of zones
+            if hasattr(self, 'current_data') and self.current_data is not None:
+                if isinstance(self.current_data, pd.DataFrame) and 'zone_id' in self.current_data.columns:
+                    # If we have zone_id in the last action results, use that directly
+                    zone_list = self.current_data['zone_id'].tolist()
+                    self.answer = ', '.join(map(str, zone_list))
+                    print(f"Using zone list from current_data: {len(zone_list)} zones")
+                else:
+                    # Try to extract from the LLM response
+                    # Retry to get full Finish result without token limit
+                    action = self._query_llm(force_finish_action=True)
+            else:
+                # Try to extract from the LLM response
+                action = self._query_llm(force_finish_action=True)
+                
         # Extract just the action if it includes other parts
         if 'Action:' in action:
             action = action.split('Action:')[1]
@@ -144,36 +159,39 @@ class ZoneAgent:
 
         # Check if the action is to finish
         if action.startswith('Finish['):
-            # Extract the content between [ and ]
-            match = re.match(r'^Finish\[(.*)', action)
-            if match:
-                self.answer = match.group(1)
-            else:
-                # If no content in brackets, look for zone IDs in the last observation
-                # The last observation should contain "Survived Zones: [...]"
-                if "Survived Zones:" in self.scratchpad:
-                    # Find the last occurrence of Survived Zones:
-                    scratchpad_parts = self.scratchpad.split("Survived Zones:")
-                    if len(scratchpad_parts) > 1:
-                        last_survived_zones = scratchpad_parts[-1].strip()
-                        # Extract the list of zones
-                        match = re.search(r'\[(.*?)\]', last_survived_zones)
-                        if match:
-                            # Extract just the numbers as a comma-separated string
-                            zone_list = match.group(1)
-                            self.answer = zone_list
+            # If we already set self.answer above, we can skip this
+            if not hasattr(self, 'answer') or not self.answer:
+                # Extract the content between [ and ]
+                match = re.match(r'^Finish\[(.*)', action)
+                if match:
+                    self.answer = match.group(1)
+                else:
+                    # If no content in brackets, look for zone IDs in the last observation
+                    # The last observation should contain "Survived Zones: [...]"
+                    if "Survived Zones:" in self.scratchpad:
+                        # Find the last occurrence of Survived Zones:
+                        scratchpad_parts = self.scratchpad.split("Survived Zones:")
+                        if len(scratchpad_parts) > 1:
+                            last_survived_zones = scratchpad_parts[-1].strip()
+                            # Extract the list of zones
+                            match = re.search(r'\[(.*?)\]', last_survived_zones)
+                            if match:
+                                # Extract just the numbers as a comma-separated string
+                                zone_list = match.group(1)
+                                self.answer = zone_list
+                            else:
+                                # If we can't find brackets, just use the whole thing
+                                self.answer = last_survived_zones
                         else:
-                            # If we can't find brackets, just use the whole thing
-                            self.answer = last_survived_zones
+                            self.answer = ""
                     else:
                         self.answer = ""
-                else:
-                    self.answer = ""
             
             self.finished = True
             self.scratchpad += f'\nObservation {self.step_n}: Finished analysis.'
             print(f"Observation: Finished analysis.")
-            print(f"[DEBUG] Full answer captured: {self.answer}")
+            count_zones = len(self.answer.split(",")) if self.answer else 0
+            print(f"[DEBUG] Full answer captured: {count_zones} zones")
             return
         action_type, action_args, needs_loop, operator_symbol, threshold = self._parse_action(action)
 
@@ -189,7 +207,7 @@ class ZoneAgent:
         action_key = f"action{self.step_n}"  # <<< only 'actionN', clean
         if hasattr(self, 'current_data') and self.current_data is not None:
             self.action_results[action_key] = self.current_data
-
+        
             
         self.scratchpad += str(observation)
         print(f"Observation: {observation[:100]}...")
@@ -200,13 +218,11 @@ class ZoneAgent:
 
 
     def _query_llm(self, force_action: bool = False, force_finish_action: bool = False) -> str:
-        content = self._build_prompt()
-        
+        content = self._build_prompt(is_finish_action=force_finish_action)
+    
         if force_finish_action:
-            # If we need the complete Finish action, ask explicitly for it
             content += "\nProvide the COMPLETE Finish action with ALL zone IDs. Just list the numbers separated by commas. Example: Finish[840, 1660, 1281, ...]"
             
-            # ⚡ Important: Temporarily use a no-token-limit LLM
             temp_llm = ChatOpenAI(
                 temperature=0,
                 model_name=self.model_name,
@@ -217,7 +233,7 @@ class ZoneAgent:
         else:
             if force_action:
                 # Explicitly ask for just the next Action
-                content += "\nNow, provide ONLY the next Action. If using Finish with zones, list just the numbers: Finish[840, 1660, ...]"
+                content += "\nNow, provide ONLY the next Action."
             else:
                 # Explicitly ask for just the current Thought
                 content += "\nNow, provide ONLY the current Thought without including any Action."
@@ -227,16 +243,24 @@ class ZoneAgent:
         
         return response.content.strip()
 
-    def _build_prompt(self) -> str:
-        MAX_SCRATCHPAD_TOKENS = 8000  # or 4000, or 6000
-        scratchpad_tokens = len(self.scratchpad) // 4  # Rough estimate: 1 token ≈ 4 chars
+    def _build_prompt(self, is_finish_action: bool = False) -> str:
+        if is_finish_action:
+            # No token limit for finish actions - use full scratchpad
+            return self.prompt_template.format(
+                query=self.query,
+                scratchpad=self.scratchpad
+            )
+        
+        # Regular token limit for non-finish actions
+        MAX_SCRATCHPAD_TOKENS = 8000
+        scratchpad_tokens = len(self.scratchpad) // 4
+        
         if scratchpad_tokens > MAX_SCRATCHPAD_TOKENS:
-            # Keep only the last 8000 tokens worth of text
             scratchpad_cutoff = int(MAX_SCRATCHPAD_TOKENS * 4)
             scratchpad = self.scratchpad[-scratchpad_cutoff:]
         else:
             scratchpad = self.scratchpad
-
+        
         return self.prompt_template.format(
             query=self.query,
             scratchpad=scratchpad
@@ -342,6 +366,16 @@ class ZoneAgent:
 
         import inspect
 
+        # Special case for Finish action - preserve the zone list
+        if action_type == "Finish":
+            if hasattr(self, 'current_data') and self.current_data is not None:
+                if isinstance(self.current_data, pd.DataFrame) and 'zone_id' in self.current_data.columns:
+                    zone_list = self.current_data['zone_id'].tolist()
+                    zone_str = ', '.join(map(str, zone_list))
+                    self.answer = zone_str
+                    print(f"Found {len(zone_list)} zones for Finish action")
+                    return f"Using {len(zone_list)} zone IDs from previous action"
+
         # 🌟 NEW: Resolve and autofill missing args
         func = self.functions[action_type]
         sig = inspect.signature(func)
@@ -438,7 +472,7 @@ class ZoneAgent:
             print(f"Error executing normal action: {str(e)}")
             # On error, let the LLM decide what to do next
             return f"Error executing action: {str(e)}"
-
+    
     def _execute_with_loop(self, func, args_list: list, operator_symbol: str, threshold: int) -> str:
         try:
             if not hasattr(self, 'zone_df'):
@@ -446,48 +480,42 @@ class ZoneAgent:
                 return "zone_df not available for looping. Halting."
 
             survived_zone_ids = []
-
-            # Debug: Let's see what's in args_list
-
-            # First, let's create a mapping of positions and types
-            arg_info = []
-            for i, arg in enumerate(args_list):
-                if isinstance(arg, (pd.DataFrame, gpd.GeoDataFrame)):
-                    # Determine which DataFrame this is
-                    is_parking = False
-                    is_poi_spend = False
-                    if hasattr(self, 'parking_df') and arg is self.parking_df:
-                        is_parking = True
-                    elif hasattr(self, 'poi_spend_df') and arg is self.poi_spend_df:
-                        is_poi_spend = True
-                    arg_info.append({'pos': i, 'type': 'df', 'is_parking': is_parking, 'is_poi_spend': is_poi_spend})
-                elif isinstance(arg, str) and arg == 'zone_id':
-                    arg_info.append({'pos': i, 'type': 'zone_id'})
-                else:
-                    arg_info.append({'pos': i, 'type': 'other', 'value': arg})
-
+            print("[Loop Execution] Starting zone iteration...")
 
             for zone_id in self.zone_df['zone_id'].unique():
                 try:
-                    # Create the arguments for this specific zone
-                    loop_args = [None] * len(args_list)
-                    
-                    for info in arg_info:
-                        if info['type'] == 'df':
-                            # Filter the DataFrame for this zone
-                            df_arg = args_list[info['pos']]
-                            filtered_df = filter_df_based_on_zone(df_arg, zone_id)
-                            loop_args[info['pos']] = filtered_df
-                        elif info['type'] == 'zone_id':
-                            loop_args[info['pos']] = zone_id
-                        else:
-                            loop_args[info['pos']] = info['value']
+                    # Determine if we need to filter a base dataframe
+                    base_df = None
+                    for arg in args_list:
+                        if isinstance(arg, (pd.DataFrame, gpd.GeoDataFrame)):
+                            if arg.equals(self.parking_df):
+                                base_df = self.parking_df
+                            elif arg.equals(self.poi_spend_df):
+                                base_df = self.poi_spend_df
+
+                    # Prepare loop arguments
+                    loop_args = []
+                    if base_df is not None:
+                        filtered_df = filter_df_based_on_zone(base_df, zone_id)
+                        for arg in args_list:
+                            if isinstance(arg, (pd.DataFrame, gpd.GeoDataFrame)):
+                                loop_args.append(filtered_df)
+                            elif arg == 'zone_id':
+                                loop_args.append(zone_id)
+                            else:
+                                loop_args.append(arg)
+                    else:
+                        for arg in args_list:
+                            if arg == 'zone_id':
+                                loop_args.append(zone_id)
+                            else:
+                                loop_args.append(arg)
 
                     output = func(*loop_args)
 
                     if self._is_valid_output(output):
                         survived_zone_ids.append(zone_id)
-
+                    
                 except Exception as zone_error:
                     print(f"[Zone Error] Failed processing zone {zone_id}: {str(zone_error)}")
                     continue
@@ -505,6 +533,7 @@ class ZoneAgent:
         except Exception as e:
             print(f"[Critical Error] Loop execution failed: {str(e)}")
             return f"Error during looping execution: {str(e)}"
+        
 
     def is_finished(self) -> bool:
         return self.finished
@@ -543,32 +572,74 @@ class ZoneAgent:
         }
 
     def _finish(self, args: str) -> str:
+        # If args is empty or None, check if we have current_data with zone_id
+        if not args and hasattr(self, 'current_data') and self.current_data is not None:
+            if isinstance(self.current_data, pd.DataFrame) and 'zone_id' in self.current_data.columns:
+                zone_list = self.current_data['zone_id'].tolist()
+                self.answer = ', '.join(map(str, zone_list))
+                print(f"Finish: Using {len(zone_list)} zones from current_data")
+                return f"Finished with {len(zone_list)} zones"
+        
+        # Otherwise use the provided args
         self.answer = args
         self.finished = True
         return "Finished analysis."
 
         
 
-    import re
-    import textwrap
     def self_defined_logic(self, code: str):
         """
         Executes custom code provided in self_defined_logic[].
         Replaces $actionN references with actual previous action outputs.
         """
-
+        
         # Step 1: Prepare local environment
         local_env = {}
-
+        
+        local_env["poi_spend_df"] = self.poi_spend_df
+        local_env["parking_df"] = self.parking_df
+        local_env["zone_df"] = self.zone_df
+        
+        # Debug: Print available action results
+        print(f"Available action results: {list(self.action_results.keys())}")
+        
         # Step 2: Inject previous action results
         for key, value in self.action_results.items():
-            injected_var = f"_injected_{key}"
-            local_env[injected_var] = value
-
-        # Step 3: Process the code
-        code_processed = code.strip()
+            match = re.match(r'action(\d+)', key)
+            if match:
+                short_key = f"action{match.group(1)}"
+                injected_var = f"_injected_{short_key}"
+                local_env[injected_var] = value
+                print(f"Injected {injected_var} for key {key}")
         
-        # Handle triple quotes
+        # Step 3: Process the code
+        code_processed = code
+        
+        # Debug: Print original code
+        print(f"Original code: {code}")
+        
+        # Find all $actionN references in the code
+        action_refs = re.findall(r'\$action(\d+)', code_processed)
+        print(f"Found action references: {action_refs}")
+        
+        # Replace $actionN with the actual variables
+        for action_num in action_refs:
+            action_key = f"action{action_num}"
+            injected_var = f"_injected_{action_key}"
+            
+            if action_key in self.action_results:
+                # Replace $actionN with _injected_actionN
+                pattern = rf"\$action{action_num}(?!\w)"
+                code_processed = re.sub(pattern, injected_var, code_processed)
+                print(f"Replaced $action{action_num} with {injected_var}")
+            else:
+                raise ValueError(f"Reference to $action{action_num} but 'action{action_num}' not found in action_results")
+        
+        # Debug: Print processed code
+        print(f"Processed code: {code_processed}")
+        
+        # Rest of your code processing...
+        # First, extract code from triple quotes if present
         if code_processed.startswith("'''"):
             end_idx = code_processed.find("'''", 3)
             if end_idx != -1:
@@ -578,49 +649,29 @@ class ZoneAgent:
             if end_idx != -1:
                 code_processed = code_processed[3:end_idx]
         
-        # Replace action references
-        for key in self.action_results.keys():
-            pattern = re.compile(rf"\${key}(?!\w)")  # match $action2 but NOT $action22 etc
-            code_processed = pattern.sub(f"_injected_{key}", code_processed)
-
-        # Ensure proper indentation
-        lines = code_processed.split('\n')
-        if len(lines) > 1:
-            # Find minimum indentation
-            min_indent = float('inf')
-            for line in lines[1:]:  # Skip first line
-                if line.strip():  # Only consider non-empty lines
-                    indent = len(line) - len(line.lstrip())
-                    min_indent = min(min_indent, indent)
-            
-            # Remove minimum indentation from all lines
-            if min_indent != float('inf'):
-                code_processed = '\n'.join(
-                    line[min_indent:] if line.strip() else line
-                    for line in lines
-                )
-
+        # Apply dedent to the code
+        code_processed = textwrap.dedent(code_processed)
+        code_processed = code_processed.replace('return result', '').strip()
+        
         # Step 4: Execute
         try:
-            # Create a new scope for execution
             exec_scope = {}
             exec(code_processed, exec_scope, local_env)
         except Exception as e:
             raise RuntimeError(f"Error executing self_defined_logic code: {e}")
-
+        
         # Step 5: Make sure 'result' exists
         if "result" not in local_env:
             raise ValueError("Custom self_defined_logic code must assign a 'result' variable.")
-
+        
+        self.current_data = local_env["result"]
         return local_env["result"]
 
 
 
 
 
-
-
-##################################################################################333333333
+##################################################################################
 # THESE FUNCTIONS NEED TO BE LOOPED OVER (FOR SURE, some of them the llm can be creative then I didnt include here)
 NEED_LOOP_FUNCTIONS = [
     'filter_df_based_on_zone',
