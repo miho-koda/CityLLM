@@ -1,14 +1,22 @@
 def get_spendparam_years(poi_spend_df, spendparm, year):
     """
-    Aggregate or average the spend parameter for all POIs for a given year.
+    Computes an aggregated or average spending metric for a specified year across all POIs.
 
     Parameters:
-    - poi_spend_df (pd.DataFrame): DataFrame with both POI and spend columns
-    - spendparm (str): Spend metric base name (e.g., 'RAW_TOTAL_SPEND')
-    - year (str or int): Year of interest (e.g., 2022)
+    - poi_spend_df (pd.DataFrame): DataFrame containing POI-level data with time-specific spending columns.
+    - spendparm (str): The base name of the spending parameter to compute. Must be one of:
+        - Aggregated: {'RAW_TOTAL_SPEND', 'RAW_NUM_TRANSACTIONS', 'RAW_NUM_CUSTOMERS'}
+        - Averaged: {'MEDIAN_SPEND_PER_TRANSACTION', 'MEDIAN_SPEND_PER_CUSTOMER', 'SPEND_PCT_CHANGE_VS_PREV_YEAR'}
+    - year (int or str): The year of interest (e.g., 2022). The function looks for a column in the format '{spendparm}_{year}'.
 
     Returns:
-    - float: Aggregated or averaged spend value
+    - float: 
+        - Sum of values if the parameter is an aggregated metric.
+        - Mean of values if the parameter is an averaged metric.
+        - 0.0 if no valid data is found or an error occurs.
+    
+    Raises:
+    - ValueError: If `spendparm` is invalid or the column for the specified year does not exist in the DataFrame.
     """
     try:
         aggregate_params = {

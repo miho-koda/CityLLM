@@ -19,7 +19,7 @@ dataframe_documentation = """
 | `REGION`                                 | State or region abbreviation |
 | `POSTAL_CODE`                            | Zip/postal code of the POI |
 | `GEOMETRY_TYPE`                          | Type of geometry (e.g., Polygon, Point) |
-| `POLYGON_WKT`                            | Well-Known Text (WKT) representation of the POI’s boundary |
+| `POLYGON_WKT`                            | Well-Known Text (WKT) representation of the POI's boundary |
 | `PHONE_NUMBER`                           | Contact phone number for the POI |
 | `WKT_AREA_SQ_METERS`                     | Area of the POI polygon in square meters |
 | `zone_id`                                | Zone ID assigned to the POI |
@@ -367,7 +367,7 @@ You have access to the following functions as tools. Each tool has a specific fo
     Parameters:
     - code: A multi-line Python string.
     - You may reference:
-        - Previous Action results using $action1, $action2, etc.
+        - Previous Action results using $action1, $action2, etc. 
         - Predefined DataFrames: poi_spend_df, parking_df, and zone_df.
     - Your code must assign a variable called `result`, which will be returned as output.
     - You may not import external libraries (e.g., pandas, math).
@@ -383,7 +383,7 @@ You have access to the following functions as tools. Each tool has a specific fo
         merged_df = filtered_df.merge(poi_spend_df, on='zone_id', how='left')
         result = merged_df
         '''
-]
+    ]
     Here is the documentation for the DataFrames you will be working with:
         ## DataFrame Documentation
 
@@ -404,7 +404,7 @@ You have access to the following functions as tools. Each tool has a specific fo
         | `REGION`                                 | State or region abbreviation |
         | `POSTAL_CODE`                            | Zip/postal code of the POI |
         | `GEOMETRY_TYPE`                          | Type of geometry (e.g., Polygon, Point) |
-        | `POLYGON_WKT`                            | Well-Known Text (WKT) representation of the POI’s boundary |
+        | `POLYGON_WKT`                            | Well-Known Text (WKT) representation of the POI's boundary |
         | `PHONE_NUMBER`                           | Contact phone number for the POI |
         | `WKT_AREA_SQ_METERS`                     | Area of the POI polygon in square meters |
         | `zone_id`                                | Zone ID assigned to the POI |
@@ -449,43 +449,32 @@ You have access to the following functions as tools. Each tool has a specific fo
 - Every Action must use the format: 
 function_name[arg1, arg2, ...]
 Needs Loop Over Zones: Yes or No
-Threshold: [operator] [value]
 - If an action requires zone_id as input but you want to loop through all zones, then you should put -1 as zone_id
-- Threshold rules: 
-    - get_zone_center, get_distance_km, get_neighbor_zones, get_population, get_transport_pois_in_zone, self_defined_logic are special functions.
-    - You are only allowed to use the Threshold feature if the function you are using is NOT a special function.
-    - Even if no threshold constraint applies or if the function is a special function, **do not omit the Threshold line**.
-        - If no threshold constraint applies or if the function is a special function, set it as: `Threshold: [None] [None]`
 
 
 - Only one function per Action. No combining tools.
 - Always follow the Thought → Action → Observation sequence.
 - Never perform multiple Actions in a row.
 
-CRITICAL: When operations need to build on results from previous actions:
+---## Data Chaining Guidelines:
+When operations need to build on results from previous actions:
 1. Use $action<n> to reference the result from Action n (e.g., $action1, $action2)
 2. This allows chaining operations on previously computed results
-
-Example for actions:
-    Action 1: filter_pois_by_top_category[poi_spend_df, "Other Schools and Instruction"]
-    Needs Loop Over Zones: Yes
-    Threshold: >= 10
-
-    Action 2: filter_pois_by_sub_category[$action1, "Exam Preparation and Tutoring"]
-    Needs Loop Over Zones: No
-    Threshold: [None] [None]
-
-    Action 3: get_neighbor_zones(zone_df, -1, 4)
-    Needs Loop Over Zones: Yes
-    Threshold: [None] [None]
-
----## Data Chaining Guidelines:
 
 When working with complex queries that require sequential operations:
 1. Identify dependencies between operations
 2. Use previous action results in subsequent actions
 3. Build your analysis incrementally
 
+Example for actions:
+    Action 1: filter_pois_by_top_category[poi_spend_df, "Other Schools and Instruction"]
+    Needs Loop Over Zones: Yes
+
+    Action 2: filter_pois_by_sub_category[$action1, "Exam Preparation and Tutoring"]
+    Needs Loop Over Zones: No
+
+    Action 3: get_neighbor_zones(zone_df, -1, 4)
+    Needs Loop Over Zones: Yes
 
 ## 🚨 Important Clarification about Looping:
 
@@ -1004,6 +993,8 @@ user_prompt = [
             "Interested in zones where the nearest station within the zone is no more than 180 meters from the zone centroid — the goal is max foot traffic.",
             "I want to open a general store. Any zones where the distance from the zone centroid to the closest taxi spot is under 900 meters and also within the zone?",
             "Show me zones where the nearest station within the zone is no more than 1,000 meters from the zone centroid — needs to be somewhat reachable.",
+            "Can you check for zones where the subway entrance within the zone is less than 700 meters from the zone centroid? I know they're rare there, but worth checking.",
+            "I'm considering opening a small clinic. Are there any zones where the bus stop within the zone is within 750 meters of the zone centroid?",
             "Can you check for zones where the subway entrance within the zone is less than 700 meters from the zone centroid? I know they’re rare there, but worth checking.",
             "I’m considering opening a small clinic. Are there any zones where the bus stop within the zone is within 750 meters of the zone centroid?",
             "Find me zones where the nearest taxi stand within the zone is under 950 meters from the zone centroid — thinking of a bed-and-breakfast setup.",

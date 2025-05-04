@@ -514,10 +514,10 @@ medium_12 = [
 medium_13 = [
     "I'm scouting locations for a high-traffic salon and retail space. Show me zones with at least 10 POIs in the sub-categories {Beauty Salons} or {Women's Clothing Stores}, and where the nearest bus stop is under 200 meters from the zone centroid.",
     "Looking to build a late-night food plaza—find me zones with 12+ POIs in sub category {Drinking Places (Alcoholic Beverages)} and {Snack and Nonalcoholic Beverage Bars}, and where the nearest subway entrance is less than 150 meters away.",
-    "I want to open a hybrid tattoo parlor and juice bar. I need zones with at least 8 POIs in the categories {Beauty Salons} and {Snack and Nonalcoholic Beverage Bars}, and a taxi stop within 180 meters from the zone centroid.",
-    "Thinking of launching a wellness and café combo—show me zones with 10+ POIs in {Beauty Salons} or {Snack and Nonalcoholic Beverage Bars}, and where the closest bus stop is less than 200 meters away.",
-    "I want to start a nightlife venue—looking for areas with at least 14 POIs in {Drinking Places (Alcoholic Beverages)} and {Snack and Nonalcoholic Beverage Bars}, and the nearest station under 250 meters from the centroid.",
-    "Opening a boutique gym and smoothie shop—show me zones with 9 or more POIs in {Fitness and Recreational Sports Centers} and {Snack and Nonalcoholic Beverage Bars}, and the closest subway entrance within 200 meters of the centroid.",
+    "I want to open a hybrid tattoo parlor and juice bar. I need zones with at least 8 POIs in the sub-categories {Beauty Salons} and {Snack and Nonalcoholic Beverage Bars}, and a taxi stop within 180 meters from the zone centroid.",
+    "Thinking of launching a wellness and café combo—show me zones with 10+ POIs in the sub-categories {Beauty Salons} or {Snack and Nonalcoholic Beverage Bars}, and where the closest bus stop is less than 200 meters away.",
+    "I want to start a nightlife venue—looking for areas with at least 14 POIs in the sub-categories {Drinking Places (Alcoholic Beverages)} and {Snack and Nonalcoholic Beverage Bars}, and the nearest station under 250 meters from the centroid.",
+    "Opening a boutique gym and smoothie shop—show me zones with 9 or more POIs in the sub-categories {Fitness and Recreational Sports Centers} and {Snack and Nonalcoholic Beverage Bars}, and the closest subway entrance within 200 meters of the centroid.",
             
 ]
 

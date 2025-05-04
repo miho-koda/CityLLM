@@ -13,6 +13,7 @@ from prompt import (
 
 )
 import re
+
 import textwrap
 import numpy as np
 from langchain_openai import ChatOpenAI
@@ -42,7 +43,7 @@ class ZoneAgent:
         self.max_steps = max_steps
         self.max_retries = max_retries
         self.constraint_threshold = None  # Default: no threshold
-        self.action_results = {}
+        self.action_results = {}  # Will store (result, result_type) tuples
         
         self.llm = ChatOpenAI(
             temperature=0,
@@ -68,32 +69,35 @@ class ZoneAgent:
     
     def _clean_action_format(self, action: str) -> str:
         action = action.strip()
-
+        
         # Remove "Action N:" prefix if it somehow exists
         if re.match(r'^Action\s+\d+:', action):
             action = re.sub(r'^Action\s+\d+:\s*', '', action)
-
+        
         # Detect if this is a self_defined_logic block (even if messy line breaks)
         first_line = action.split('\n', 1)[0].strip()
         if first_line.startswith('self_defined_logic['):
             return action  # 🚀 Do not modify self_defined_logic actions
-
+        
         # Otherwise, clean normally
         lines = action.split('\n')
         cleaned_lines = [re.sub(r'\s+', ' ', line.strip()) for line in lines if line.strip()]
-        action = '\n'.join(cleaned_lines)
-
-        # Handle parentheses to square brackets
-        if '(' in action and ')' in action:
-            action = re.sub(r'(\w+)\((.*?)\)', lambda m: f"{m.group(1)}[{m.group(2).strip()}]", action)
-
-        # If model outputs multiple lines, only take the first valid one
-        if '\n' in action:
-            action = action.split('\n')[0]
-
-        # Normalize spaces
-        action = re.sub(r'\s+', ' ', action)
-
+        
+        # Check for special multi-line actions that need to be preserved
+        if len(cleaned_lines) > 1 and any(line.startswith(("Needs Loop Over Zones:", "Threshold:")) for line in cleaned_lines[1:]):
+            # Keep all lines for these special action types
+            action = '\n'.join(cleaned_lines)
+        else:
+            # For regular actions, join all lines and normalize
+            action = ' '.join(cleaned_lines)
+            
+            # Handle parentheses to square brackets
+            if '(' in action and ')' in action:
+                action = re.sub(r'(\w+)\((.*?)\)', lambda m: f"{m.group(1)}[{m.group(2).strip()}]", action)
+            
+            # Normalize spaces
+            action = re.sub(r'\s+', ' ', action)
+        
         return action
 
     def run(self, query: str, reset: bool = True) -> tuple:
@@ -107,11 +111,23 @@ class ZoneAgent:
 
         while not self.is_finished() and not self.is_halted():
             print(f"\nStep {self.step_n}:")
-            self.step()
+            try:
+                self.step()
+            except Exception as step_error:
+                error_msg = f"\n[ERROR] Step {self.step_n} failed: {str(step_error)}"
+                print(error_msg)
+                self.scratchpad += f"\nObservation {self.step_n}: {error_msg}"
+                self.answer = f"Pipeline failed at step {self.step_n}. Error: {str(step_error)}"
+                break
 
         print("\n=== Run Complete ===")
-        print(f"Final Answer: {self.answer[:100]}...")
+        if self.answer.startswith("Pipeline failed"):
+            print(f"Pipeline failed: {self.answer}")
+        else:
+            print(f"Final Answer: {self.answer[:100]}...")
         return self.answer, self.scratchpad
+            
+        
 
     def step(self) -> None:
 
@@ -206,7 +222,8 @@ class ZoneAgent:
         
         action_key = f"action{self.step_n}"  # <<< only 'actionN', clean
         if hasattr(self, 'current_data') and self.current_data is not None:
-            self.action_results[action_key] = self.current_data
+            result_type = type(self.current_data).__name__
+            self.action_results[action_key] = (self.current_data, result_type)
         
             
         self.scratchpad += str(observation)
@@ -232,8 +249,34 @@ class ZoneAgent:
             response = temp_llm.invoke([HumanMessage(content=content)])
         else:
             if force_action:
-                # Explicitly ask for just the next Action
                 content += "\nNow, provide ONLY the next Action."
+                # Add detailed information about available action results
+                action_results_info = "\nCurrent action_results contains:\n"
+                for key, value_tuple in self.action_results.items():
+                    result_value, result_type = value_tuple
+                    action_results_info += f"- {key}: (type: {result_type})\n"
+                    
+                    # Handle different types
+                    if isinstance(result_value, pd.DataFrame):
+                        columns = list(result_value.columns)
+                        first_3_rows = result_value.head(3).to_string()
+                        action_results_info += f"  Columns: {columns}\n  First 3 rows:\n{first_3_rows}\n"
+                    elif isinstance(result_value, dict):
+                        first_3_items = dict(list(result_value.items())[:3])
+                        action_results_info += f"  First 3 items: {first_3_items}\n"
+                    elif isinstance(result_value, list):
+                        first_3_items = result_value[:3]
+                        action_results_info += f"  First 3 items: {first_3_items}\n"
+                    elif isinstance(result_value, (str, int, float, bool)):
+                        action_results_info += f"  Value: {result_value}\n"
+                    else:
+                        str_value = str(result_value)
+                        truncated = str_value[:100] + "..." if len(str_value) > 100 else str_value
+                        action_results_info += f"  Value: {truncated}\n"
+                
+                content += action_results_info
+                content += "\nWhen writing self_defined_logic code, use $actionN to access the result value directly.\n"
+                
             else:
                 # Explicitly ask for just the current Thought
                 content += "\nNow, provide ONLY the current Thought without including any Action."
@@ -458,28 +501,36 @@ class ZoneAgent:
 
 
 
+    # def _execute_normal(self, func, args_list: list, operator_symbol: str, threshold: int) -> str:
+    #     try:
+    #         result = func(*args_list)
+    #         self.current_data = result
+
+    #         if not self._check_threshold(result, operator_symbol, threshold):
+    #             # Don't halt - let the LLM decide what to do
+    #             return f"Constraint not satisfied. Result: {result}, Operator: {operator_symbol}, Threshold: {threshold}"
+
+    #         return str(result)
+    #     except Exception as e:
+    #         print(f"Error executing normal action: {str(e)}")
+    #         # On error, let the LLM decide what to do next
+    #         return f"Error executing action: {str(e)}"
     def _execute_normal(self, func, args_list: list, operator_symbol: str, threshold: int) -> str:
         try:
             result = func(*args_list)
             self.current_data = result
-
-            if not self._check_threshold(result, operator_symbol, threshold):
-                # Don't halt - let the LLM decide what to do
-                return f"Constraint not satisfied. Result: {result}, Operator: {operator_symbol}, Threshold: {threshold}"
-
             return str(result)
         except Exception as e:
             print(f"Error executing normal action: {str(e)}")
-            # On error, let the LLM decide what to do next
             return f"Error executing action: {str(e)}"
-    
+
     def _execute_with_loop(self, func, args_list: list, operator_symbol: str, threshold: int) -> str:
         try:
             if not hasattr(self, 'zone_df'):
                 print("[Error] zone_df not available. Halting.")
                 return "zone_df not available for looping. Halting."
 
-            survived_zone_ids = []
+            results = []
             print("[Loop Execution] Starting zone iteration...")
 
             for zone_id in self.zone_df['zone_id'].unique():
@@ -513,27 +564,78 @@ class ZoneAgent:
 
                     output = func(*loop_args)
 
-                    if self._is_valid_output(output):
-                        survived_zone_ids.append(zone_id)
+                    if self._is_valid_output(output) and self._check_threshold(output, operator_symbol, threshold):
+                        results.append(zone_id)
                     
                 except Exception as zone_error:
                     print(f"[Zone Error] Failed processing zone {zone_id}: {str(zone_error)}")
                     continue
 
             print("\n[Loop Execution] Finalizing results...")
-            if survived_zone_ids:
-                filtered_zone_df = self.zone_df[self.zone_df['zone_id'].isin(survived_zone_ids)]
+            self.current_data = results
+            if results:
+                filtered_zone_df = self.zone_df[self.zone_df['zone_id'].isin(results)]
                 self.current_data = filtered_zone_df
-                print(f"[Loop Execution] Survived Zones: {survived_zone_ids}")
-                return f"Survived Zones: {survived_zone_ids}"
+                print(f"[Loop Execution]: {results}")
+                return f"{results}"
             else:
-                print("[Loop Execution] No zones survived.")
-                return "No zones survived the loop."
+                print("[Loop Execution] No output.")
+                return "No output."
 
         except Exception as e:
             print(f"[Critical Error] Loop execution failed: {str(e)}")
             return f"Error during looping execution: {str(e)}"
-        
+    def _execute_with_loop(self, func, args_list: list, operator_symbol: str, threshold: int) -> str:
+        try:
+            if not hasattr(self, 'zone_df'):
+                print("[Error] zone_df not available. Halting.")
+                return "zone_df not available for looping. Halting."
+
+            results = []
+            print("[Loop Execution] Starting zone iteration...")
+
+            for zone_id in self.zone_df['zone_id'].unique():
+                try:
+                    base_df = None
+                    for arg in args_list:
+                        if isinstance(arg, (pd.DataFrame, gpd.GeoDataFrame)):
+                            if arg.equals(self.parking_df):
+                                base_df = self.parking_df
+                            elif arg.equals(self.poi_spend_df):
+                                base_df = self.poi_spend_df
+
+                    loop_args = []
+                    if base_df is not None:
+                        filtered_df = filter_df_based_on_zone(base_df, zone_id)
+                        for arg in args_list:
+                            if isinstance(arg, (pd.DataFrame, gpd.GeoDataFrame)):
+                                loop_args.append(filtered_df)
+                            elif arg == 'zone_id':
+                                loop_args.append(zone_id)
+                            else:
+                                loop_args.append(arg)
+                    else:
+                        for arg in args_list:
+                            if arg == 'zone_id':
+                                loop_args.append(zone_id)
+                            else:
+                                loop_args.append(arg)
+
+                    output = func(*loop_args)
+                    results.append(output)
+
+                except Exception as zone_error:
+                    print(f"[Zone Error] Failed processing zone {zone_id}: {str(zone_error)}")
+                    continue
+
+            print("\n[Loop Execution] Finalizing results...")
+            self.current_data = results
+            return str(results) if results else "No output."
+
+        except Exception as e:
+            print(f"[Critical Error] Loop execution failed: {str(e)}")
+            return f"Error during looping execution: {str(e)}"
+
 
     def is_finished(self) -> bool:
         return self.finished
@@ -609,8 +711,10 @@ class ZoneAgent:
             if match:
                 short_key = f"action{match.group(1)}"
                 injected_var = f"_injected_{short_key}"
-                local_env[injected_var] = value
-                print(f"Injected {injected_var} for key {key}")
+                # Extract just the result value from the tuple
+                result_value = value[0]
+                local_env[injected_var] = result_value
+                print(f"Injected {injected_var} for key {key} with type {value[1]}")
         
         # Step 3: Process the code
         code_processed = code
@@ -631,7 +735,7 @@ class ZoneAgent:
                 # Replace $actionN with _injected_actionN
                 pattern = rf"\$action{action_num}(?!\w)"
                 code_processed = re.sub(pattern, injected_var, code_processed)
-                print(f"Replaced $action{action_num} with {injected_var}")
+                print(f"Replaced $action{action_num} with {injected_var} (type: {self.action_results[action_key][1]})")
             else:
                 raise ValueError(f"Reference to $action{action_num} but 'action{action_num}' not found in action_results")
         
