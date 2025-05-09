@@ -10,6 +10,8 @@ from langchain.chat_models import ChatOpenAI
 from langchain.schema import HumanMessage
 from prompt import (
     ZEROSHOT_REACT_INSTRUCTION,
+    REFLECTION_INSTRUCTION, 
+    REFLECTION_HEADER,
 
 )
 import re
@@ -33,9 +35,9 @@ from site_selection.population import get_population
 
 class ZoneAgent:
     def __init__(self,
-                 mode: str = 'zero_shot',
-                 model_name: str = 'gpt-4-turbo',
-                 max_steps: int = 30,
+                 mode: str = 'reflexion',
+                 model_name: str = 'gpt-4o',
+                 max_steps: int = 15,
                  max_retries: int = 3) -> None:
 
         self.mode = mode
@@ -44,7 +46,12 @@ class ZoneAgent:
         self.max_retries = max_retries
         self.constraint_threshold = None  # Default: no threshold
         self.action_results = {}  # Will store (result, result_type) tuples
-        
+        self.scratchpad = ""
+        if mode == 'reflexion':
+            self.needs_reflection = False  # Will be set True only if failure or timeout happens
+
+
+
         self.llm = ChatOpenAI(
             temperature=0,
             model_name=self.model_name,
@@ -60,12 +67,8 @@ class ZoneAgent:
 
         if self.mode == 'zero_shot':
             self.prompt_template = ZEROSHOT_REACT_INSTRUCTION
-        elif self.mode == 'chain_of_thought':
-            pass
-        elif self.mode == 'react':
-            pass
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
+        elif self.mode == 'reflexion':
+            self.prompt_template = ZEROSHOT_REACT_INSTRUCTION
     
     def _clean_action_format(self, action: str) -> str:
         action = action.strip()
@@ -106,6 +109,7 @@ class ZoneAgent:
         self.query = query
         if reset:
             self._reset_agent()
+        
 
         self.preload_datasets()
 
@@ -118,122 +122,102 @@ class ZoneAgent:
                 print(error_msg)
                 self.scratchpad += f"\nObservation {self.step_n}: {error_msg}"
                 self.answer = f"Pipeline failed at step {self.step_n}. Error: {str(step_error)}"
+
+                if self.mode == 'reflexion':
+                    self.needs_reflection = True  # 👈 set only in reflexion mode
+
                 break
+        if self.is_halted() and self.mode == 'reflexion':
+            self.needs_reflection = True  # 👈 mark for reflexion retry
 
         print("\n=== Run Complete ===")
         if self.answer.startswith("Pipeline failed"):
             print(f"Pipeline failed: {self.answer}")
         else:
             print(f"Final Answer: {self.answer[:100]}...")
-        return self.answer, self.scratchpad
-            
-        
 
+        # NEW FINAL STEP
+        if self.mode == 'reflexion' and hasattr(self, "needs_reflection") and self.needs_reflection:
+            reflection = self.generate_reflection()
+            return self._retry_with_reflection(reflection)
+        return self.answer, self.scratchpad
+     
     def step(self) -> None:
+        retry_count = self.retry_record.get(self.step_n, 0)  # <<< Track retries
 
         thought = self._query_llm()
-        # Extract only the thought part if it contains both thought and action
         if 'Action:' in thought:
             thought = thought.split('Action:')[0].strip()
-        # Remove the "Thought:" prefix if it exists
         if thought.startswith('Thought:'):
             thought = thought[8:].strip()
-        
+
         self.scratchpad += f'\nThought {self.step_n}: {thought}'
         print(f"Thought: {thought}")
 
-        # Now get the action specifically
         action = self._query_llm(force_action=True)
         if action.startswith('Finish['):
-            # Instead of relying on the LLM to output all zones, check if we have existing data
-            # from the last action that contains a list of zones
             if hasattr(self, 'current_data') and self.current_data is not None:
                 if isinstance(self.current_data, pd.DataFrame) and 'zone_id' in self.current_data.columns:
-                    # If we have zone_id in the last action results, use that directly
                     zone_list = self.current_data['zone_id'].tolist()
                     self.answer = ', '.join(map(str, zone_list))
                     print(f"Using zone list from current_data: {len(zone_list)} zones")
-                else:
-                    # Try to extract from the LLM response
-                    # Retry to get full Finish result without token limit
-                    action = self._query_llm(force_finish_action=True)
             else:
-                # Try to extract from the LLM response
                 action = self._query_llm(force_finish_action=True)
-                
-        # Extract just the action if it includes other parts
+
         if 'Action:' in action:
             action = action.split('Action:')[1]
             if 'Thought:' in action:
                 action = action.split('Thought:')[0]
             action = action.strip()
-        
-        
+
         action = self._clean_action_format(action)
         self.scratchpad += f'\nAction {self.step_n}: {action}'
         print(f"Action: {action}")
 
-        # Check if the action is to finish
         if action.startswith('Finish['):
-            # If we already set self.answer above, we can skip this
             if not hasattr(self, 'answer') or not self.answer:
-                # Extract the content between [ and ]
                 match = re.match(r'^Finish\[(.*)', action)
                 if match:
                     self.answer = match.group(1)
                 else:
-                    # If no content in brackets, look for zone IDs in the last observation
-                    # The last observation should contain "Survived Zones: [...]"
-                    if "Survived Zones:" in self.scratchpad:
-                        # Find the last occurrence of Survived Zones:
-                        scratchpad_parts = self.scratchpad.split("Survived Zones:")
-                        if len(scratchpad_parts) > 1:
-                            last_survived_zones = scratchpad_parts[-1].strip()
-                            # Extract the list of zones
-                            match = re.search(r'\[(.*?)\]', last_survived_zones)
-                            if match:
-                                # Extract just the numbers as a comma-separated string
-                                zone_list = match.group(1)
-                                self.answer = zone_list
-                            else:
-                                # If we can't find brackets, just use the whole thing
-                                self.answer = last_survived_zones
-                        else:
-                            self.answer = ""
-                    else:
-                        self.answer = ""
-            
+                    self.answer = ""
             self.finished = True
             self.scratchpad += f'\nObservation {self.step_n}: Finished analysis.'
             print(f"Observation: Finished analysis.")
             count_zones = len(self.answer.split(",")) if self.answer else 0
             print(f"[DEBUG] Full answer captured: {count_zones} zones")
             return
-        action_type, action_args, needs_loop, operator_symbol, threshold = self._parse_action(action)
 
+        action_type, action_args, needs_loop, operator_symbol, threshold = self._parse_action(action)
+        # TODO: each time something is invalid, retry if its reflexion. 
         if action_type is None:
             print("Invalid action format detected. Retrying step...")
-            self.scratchpad += "\nInvalid action format detected. Retrying step..."
-            return
+
+            self.retry_record[self.step_n] = retry_count + 1  # <<< increment retries
+            if self.retry_record[self.step_n] <= self.max_retries:
+                self.scratchpad += f"\nInvalid action format detected. Retrying step ({self.retry_record[self.step_n]}/{self.max_retries})..."
+                return  # <<< retry without incrementing step
+            else:
+                self.scratchpad += f"\nExceeded max retries for step {self.step_n}. Skipping..."
+                print(f"[WARNING] Exceeded max retries for step {self.step_n}. Moving on.")
+                self.step_n += 1  # <<< move on to next step
+                return
 
         print("\nExecuting action...")
         self.scratchpad += f'\nObservation {self.step_n}: '
         observation = self._execute_action(action_type, action_args, needs_loop, operator_symbol, threshold)
-        
-        action_key = f"action{self.step_n}"  # <<< only 'actionN', clean
+
+        action_key = f"action{self.step_n}"
         if hasattr(self, 'current_data') and self.current_data is not None:
             result_type = type(self.current_data).__name__
             self.action_results[action_key] = (self.current_data, result_type)
-        
-            
-        self.scratchpad += str(observation)
+
+        self.scratchpad += str(observation[:100])
         print(f"Observation: {observation[:100]}...")
 
         print(self.scratchpad)
-
-        self.step_n += 1  # Increment step counter
-
-
+        self.step_n += 1  # <<< increment after successful action
+        
     def _query_llm(self, force_action: bool = False, force_finish_action: bool = False) -> str:
         content = self._build_prompt(is_finish_action=force_finish_action)
     
@@ -308,10 +292,12 @@ class ZoneAgent:
             query=self.query,
             scratchpad=scratchpad
         )
-
-    def _resolve_argument(self, arg: str):
-        """Resolve argument name to actual object, or return a warning if missing."""
+   
+    def _resolve_argument(self, arg: str, param_name: str):
+        """Resolve argument name to actual object, or cast string to expected type if needed."""
         arg = arg.strip()
+
+        # Handle known shared objects
         if arg == 'poi_spend_df':
             if hasattr(self, 'poi_spend_df'):
                 return self.poi_spend_df
@@ -327,7 +313,33 @@ class ZoneAgent:
                 return self.zone_df
             else:
                 raise ValueError("zone_df not available. Please call create_zone[poi_spend_df] first.")
-        return arg  # If unknown, pass raw
+
+        param_types = {
+            'spendparm': str,
+            'year': str,
+            'lat1': float,
+            'lng1': float,
+            'lat2': float,
+            'lng2': float,
+            'zone_id': int,
+            'top_category': str,
+            'sub_category': str,
+            'poi_type': str,
+            'num': int,
+        }
+                
+        
+        #input : current input
+        type = param_types[param_name]
+        try:
+            return type(arg)
+        except Exception:
+            raise ValueError(f"Failed to cast argument '{arg}' to {type}")
+
+
+        # Return raw string if unrecognized
+        return arg
+
 
     def _parse_action(self, action: str) -> tuple:
         """
@@ -357,12 +369,13 @@ class ZoneAgent:
                 action_args = '\n'.join(lines)[len('self_defined_logic['):-1].strip()
         else:
             # Normal case
-            func_pattern = r'^(\w+)\[(.*?)\]$'
+            func_pattern = r'^(\w+)[\[\(](.*?)[\]\)]$'
             func_match = re.match(func_pattern, first_line)
             if not func_match:
                 return None, None, None, None, None
             action_type = func_match.group(1)
             action_args = func_match.group(2)
+
 
         needs_loop = action_type in NEED_LOOP_FUNCTIONS
         operator_symbol = None
@@ -439,83 +452,68 @@ class ZoneAgent:
                     if end_idx != -1:
                         code_arg = code_arg[3:end_idx]
                 else:
-                    # Fallback: regular single or double quotes
                     if code_arg.startswith("'") and code_arg.endswith("'"):
                         code_arg = code_arg[1:-1]
                     elif code_arg.startswith('"') and code_arg.endswith('"'):
                         code_arg = code_arg[1:-1]
-                
+
+
                 args_list = [code_arg]
 
+
+                for i, arg in enumerate(args_list):
+                    if isinstance(arg, str) and arg.startswith('$action'):
+                        key = arg[1:]
+                        if key in self.action_results:
+                            args_list[i] = self.action_results[key][0]
+                # Special execution
+                result = self.self_defined_logic(args_list[0])
+                return result
+            
             else:
                 # Regular case
                 args_list = []
+                # Step 1: Parse arguments
+                parsed_args = []
                 for arg in re.split(r',\s*(?=(?:[^"]*"[^"]*")*[^"]*$)', action_args):
                     arg = arg.strip()
                     if arg.startswith('"') and arg.endswith('"'):
                         arg = arg[1:-1]
                     if arg.startswith("'") and arg.endswith("'"):
                         arg = arg[1:-1]
-                    args_list.append(self._resolve_argument(arg))
+                    parsed_args.append(arg)
+
+                # Step 2: Match arguments to parameter names using the function signature
+                args_list = []
+
+                for param_name, arg in zip(param_names, parsed_args):
+                    if arg.startswith('$action'):
+                        args_list.append(arg)
+                    else:
+                        resolved_arg = self._resolve_argument(arg, param_name)
+                        args_list.append(resolved_arg)
+
+                for i, arg in enumerate(args_list):
+                    if isinstance(arg, str) and arg.startswith('$action'):
+                        key = arg[1:]
+                        if key in self.action_results:
+                            args_list[i] = self.action_results[key][0]
+
+
+
         else:
             args_list = []
 
+        
 
-
-        missing_params = [p for p in param_names if p not in (action_args or '')]
-
-        for p in missing_params:
-            if p == 'zone_df' and hasattr(self, 'zone_df'):
-                args_list.append(self.zone_df)
-            elif p == 'poi_spend_df' and hasattr(self, 'poi_spend_df'):
-                args_list.append(self.poi_spend_df)
-            elif p == 'parking_df' and hasattr(self, 'parking_df'):
-                args_list.append(self.parking_df)
-        if action_type == "self_defined_logic":
-            # Special execution
-            result = self.self_defined_logic(args_list[0])
-            return result
+        
         if needs_loop:
-            return self._execute_with_loop(func, args_list, operator_symbol, threshold)
+            return self._execute_with_loop(func, args_list, param_names)
         else:
-            return self._execute_normal(func, args_list, operator_symbol, threshold)
+            return self._execute_normal(func, args_list)
     
-    import numpy as np  # Make sure you have this
-    def _check_threshold(self, output: Any, operator_symbol: str, threshold: int) -> bool:
-        if operator_symbol is None or threshold is None:
-            return self._is_valid_output(output)
 
-        if isinstance(output, (int, float, np.integer, np.floating)):
-            if operator_symbol == ">=":
-                return output >= threshold
-            elif operator_symbol == "<=":
-                return output <= threshold
-            elif operator_symbol == ">":
-                return output > threshold
-            elif operator_symbol == "<":
-                return output < threshold
-            elif operator_symbol == "=":
-                return output == threshold
-
-        return self._is_valid_output(output)
-
-
-
-    # def _execute_normal(self, func, args_list: list, operator_symbol: str, threshold: int) -> str:
-    #     try:
-    #         result = func(*args_list)
-    #         self.current_data = result
-
-    #         if not self._check_threshold(result, operator_symbol, threshold):
-    #             # Don't halt - let the LLM decide what to do
-    #             return f"Constraint not satisfied. Result: {result}, Operator: {operator_symbol}, Threshold: {threshold}"
-
-    #         return str(result)
-    #     except Exception as e:
-    #         print(f"Error executing normal action: {str(e)}")
-    #         # On error, let the LLM decide what to do next
-    #         return f"Error executing action: {str(e)}"
-    def _execute_normal(self, func, args_list: list, operator_symbol: str, threshold: int) -> str:
+    def _execute_normal(self, func, args_list: list) -> str:
         try:
             result = func(*args_list)
             self.current_data = result
@@ -523,110 +521,35 @@ class ZoneAgent:
         except Exception as e:
             print(f"Error executing normal action: {str(e)}")
             return f"Error executing action: {str(e)}"
-
-    def _execute_with_loop(self, func, args_list: list, operator_symbol: str, threshold: int) -> str:
+    def _execute_with_loop(self, func, args_list: list, param_names: list) -> str:
         try:
             if not hasattr(self, 'zone_df'):
                 print("[Error] zone_df not available. Halting.")
                 return "zone_df not available for looping. Halting."
 
-            results = []
+            results = {}
             print("[Loop Execution] Starting zone iteration...")
-
             for zone_id in self.zone_df['zone_id'].unique():
-                try:
-                    # Determine if we need to filter a base dataframe
-                    base_df = None
-                    for arg in args_list:
-                        if isinstance(arg, (pd.DataFrame, gpd.GeoDataFrame)):
-                            if arg.equals(self.parking_df):
-                                base_df = self.parking_df
-                            elif arg.equals(self.poi_spend_df):
-                                base_df = self.poi_spend_df
-
-                    # Prepare loop arguments
-                    loop_args = []
-                    if base_df is not None:
-                        filtered_df = filter_df_based_on_zone(base_df, zone_id)
-                        for arg in args_list:
-                            if isinstance(arg, (pd.DataFrame, gpd.GeoDataFrame)):
-                                loop_args.append(filtered_df)
-                            elif arg == 'zone_id':
-                                loop_args.append(zone_id)
-                            else:
-                                loop_args.append(arg)
+            # Create zone-specific arguments
+                loop_args = []
+                
+                for i, arg in enumerate(args_list):
+                    if isinstance(arg, (pd.DataFrame, gpd.GeoDataFrame)):
+                        # Filter the DataFrame directly
+                        if func.__name__ == 'get_neighbor_zones':
+                            loop_args.append(arg)
+                        else:
+                            filtered_df = filter_df_based_on_zone(arg, zone_id)
+                            loop_args.append(filtered_df)
+                    elif arg == -1 and param_names[i] == 'zone_id':
+                        loop_args.append(zone_id)
                     else:
-                        for arg in args_list:
-                            if arg == 'zone_id':
-                                loop_args.append(zone_id)
-                            else:
-                                loop_args.append(arg)
-
-                    output = func(*loop_args)
-
-                    if self._is_valid_output(output) and self._check_threshold(output, operator_symbol, threshold):
-                        results.append(zone_id)
+                        loop_args.append(arg)
+                
+                # Execute function with zone-specific arguments
+                output = func(*loop_args)
+                results[zone_id] = output
                     
-                except Exception as zone_error:
-                    print(f"[Zone Error] Failed processing zone {zone_id}: {str(zone_error)}")
-                    continue
-
-            print("\n[Loop Execution] Finalizing results...")
-            self.current_data = results
-            if results:
-                filtered_zone_df = self.zone_df[self.zone_df['zone_id'].isin(results)]
-                self.current_data = filtered_zone_df
-                print(f"[Loop Execution]: {results}")
-                return f"{results}"
-            else:
-                print("[Loop Execution] No output.")
-                return "No output."
-
-        except Exception as e:
-            print(f"[Critical Error] Loop execution failed: {str(e)}")
-            return f"Error during looping execution: {str(e)}"
-    def _execute_with_loop(self, func, args_list: list, operator_symbol: str, threshold: int) -> str:
-        try:
-            if not hasattr(self, 'zone_df'):
-                print("[Error] zone_df not available. Halting.")
-                return "zone_df not available for looping. Halting."
-
-            results = []
-            print("[Loop Execution] Starting zone iteration...")
-
-            for zone_id in self.zone_df['zone_id'].unique():
-                try:
-                    base_df = None
-                    for arg in args_list:
-                        if isinstance(arg, (pd.DataFrame, gpd.GeoDataFrame)):
-                            if arg.equals(self.parking_df):
-                                base_df = self.parking_df
-                            elif arg.equals(self.poi_spend_df):
-                                base_df = self.poi_spend_df
-
-                    loop_args = []
-                    if base_df is not None:
-                        filtered_df = filter_df_based_on_zone(base_df, zone_id)
-                        for arg in args_list:
-                            if isinstance(arg, (pd.DataFrame, gpd.GeoDataFrame)):
-                                loop_args.append(filtered_df)
-                            elif arg == 'zone_id':
-                                loop_args.append(zone_id)
-                            else:
-                                loop_args.append(arg)
-                    else:
-                        for arg in args_list:
-                            if arg == 'zone_id':
-                                loop_args.append(zone_id)
-                            else:
-                                loop_args.append(arg)
-
-                    output = func(*loop_args)
-                    results.append(output)
-
-                except Exception as zone_error:
-                    print(f"[Zone Error] Failed processing zone {zone_id}: {str(zone_error)}")
-                    continue
 
             print("\n[Loop Execution] Finalizing results...")
             self.current_data = results
@@ -738,7 +661,7 @@ class ZoneAgent:
                 print(f"Replaced $action{action_num} with {injected_var} (type: {self.action_results[action_key][1]})")
             else:
                 raise ValueError(f"Reference to $action{action_num} but 'action{action_num}' not found in action_results")
-        
+
         # Debug: Print processed code
         print(f"Processed code: {code_processed}")
         
@@ -757,10 +680,43 @@ class ZoneAgent:
         code_processed = textwrap.dedent(code_processed)
         code_processed = code_processed.replace('return result', '').strip()
         
+        # Step 4: Inject standard libraries into local environment
+        standard_imports = {
+            "pd": __import__("pandas"),
+            "np": __import__("numpy"),
+            "math": __import__("math"),
+            "gpd": __import__("geopandas"),
+            "Point": __import__("shapely.geometry", fromlist=["Point"]).Point,
+            "Polygon": __import__("shapely.geometry", fromlist=["Polygon"]).Polygon,
+            "MultiPoint": __import__("shapely.geometry", fromlist=["MultiPoint"]).MultiPoint,
+            "defaultdict": __import__("collections", fromlist=["defaultdict"]).defaultdict,
+            "Counter": __import__("collections", fromlist=["Counter"]).Counter,
+        }
+
+        local_env.update(standard_imports)
+
+
+
+        # Debug: Final check of local_env before exec
+        print("[DEBUG] Preview of injected variables:")
+        for varname in sorted(local_env.keys()):
+            if varname.startswith("_injected_"):
+                val = local_env[varname]
+                preview = (
+                    list(val.items())[:5] if isinstance(val, dict)
+                    else val[:5] if isinstance(val, list)
+                    else str(val)[:300]
+                )
+                print(f"  {varname}: {type(val).__name__} | preview: {preview}")
+
+        # Debug: Final code string
+        print("[DEBUG] Final code string to exec:\n", code_processed)
+
         # Step 4: Execute
         try:
             exec_scope = {}
-            exec(code_processed, exec_scope, local_env)
+            #exec(code_processed, exec_scope, local_env)
+            exec(code_processed, local_env, local_env)
         except Exception as e:
             raise RuntimeError(f"Error executing self_defined_logic code: {e}")
         
@@ -770,6 +726,55 @@ class ZoneAgent:
         
         self.current_data = local_env["result"]
         return local_env["result"]
+    
+
+    def generate_reflection(self) -> str:
+        if not self.needs_reflection:
+            return ""
+
+        from langchain.prompts import PromptTemplate
+        from langchain.schema import HumanMessage
+
+        # Define the prompt template with your REFLECTION_INSTRUCTION
+        reflection_template = PromptTemplate(
+            input_variables=["query", "scratchpad"],
+            template=REFLECTION_INSTRUCTION
+        )
+
+        # Format the full reflection prompt with query and scratchpad
+        reflection_prompt = REFLECTION_HEADER + reflection_template.format(
+            query=self.query,
+            scratchpad=self.scratchpad
+        )
+
+        print("[REFLEXION] Generating reflection...")
+        
+        # Send prompt to LLM
+        response = self.llm.invoke([HumanMessage(content=reflection_prompt)])
+        
+        # Extract and return the response
+        reflection = response.content.strip()
+        full_reflection = REFLECTION_HEADER + reflection
+        print("[REFLEXION] Reflection generated:\n", full_reflection)
+        return full_reflection
+    
+    def _retry_with_reflection(self, reflection: str) -> tuple:
+        print("\n[REFLEXION] Launching retry agent with reflection...")
+
+        retry_agent = ZoneAgent(
+            mode='zero_shot',  # Retry with standard ReAct after reflection
+            model_name=self.model_name,
+            max_steps=self.max_steps,
+            max_retries=self.max_retries
+        )
+
+        # 🧠 Attach reflection at top of scratchpad
+        retry_agent.scratchpad = reflection + "\n---\n"
+
+        # Continue with same query
+        return retry_agent.run(self.query, reset=False)
+
+
 
 
 

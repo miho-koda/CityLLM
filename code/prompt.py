@@ -185,11 +185,10 @@ in_house_functions_documentation = """
     Returns: An integer population estimate for that zone.
     Example: get_population(101, zone_df) returns the number of people living in zone 101.
 
-    (16) get_transport_pois_in_zone(zone_df, poi_spend_df, poi_type):
+    (16) get_transport_pois_in_zone(zone_df, poi_type):
     Description: Returns transport-related POIs within the geometry of a given zone.
     Parameters:
     - zone_df: A GeoDataFrame containing zone geometries.
-    - poi_spend_df: DataFrame with REGION column
     - poi_type: A string representing the type of transport POI. Options: "bus_stop", "station", "subway_entrance", "aerodrome", "taxi".
     Returns: A dictionary of zone_id as keys and list of (latitude, longitude) tuples representing matched POIs inside the zone. dictionary: {{zone_id: [(lat, lon), ...]}}
     Example: get_transport_pois_in_zone(zone_df, poi_df, "subway_entrance") returns coordinates of subway entrances in all zones.
@@ -248,6 +247,24 @@ I'm looking to open a family entertainment center,
 
 ############################################################REACT######################################################################################
 # Prompt templates for POI/Zone Analysis Framework
+REFLECTION_HEADER = """
+    "You attempted to generate a zoning plan but were unsuccessful. "
+    "The following reflection(s) analyze the previous failure and provide suggestions for a better strategy. "
+    "Use them to improve your reasoning and avoid making the same mistakes.\n"
+"""
+
+REFLECTION_INSTRUCTION = """You are a reasoning agent for urban site selection. You previously attempted to plan a zoning strategy using data on parking, population, spending, and points of interest, but failed due to syntaxerrors or exhausting your allowed steps.
+
+Below is your original query and a transcript of your reasoning process. In a few sentences, explain a likely reason for the failure. Then, describe a revised high-level plan that might avoid the same mistake. Be specific and concise. Use complete sentences.
+
+Query: {query}
+
+Scratchpad:
+{scratchpad}
+
+Reflection:"""
+
+
 
 ZEROSHOT_REACT_INSTRUCTION = """
 Analyze zones and POIs using interleaving 'Thought', 'Action', and 'Observation' steps. Ensure you gather valid information about zones, POIs, parking, spending patterns, and transportation. All information should be written in Notebook, which will then be input into the Analyzer tool. Note that nested use of tools is prohibited. 'Thought' can reason about the current situation, and 'Action' can use any of the available functions:
@@ -354,36 +371,91 @@ You have access to the following functions as tools. Each tool has a specific fo
     Returns: An integer population estimate for that zone.
     Example: get_population(101, zone_df) returns the number of people living in zone 101.
 
-    (16) get_transport_pois_in_zone(zone_df, poi_spend_df, poi_type):
+    (16) get_transport_pois_in_zone(zone_df, poi_type):
     Description: Returns transport-related POIs within the geometry of a given zone.
     Parameters:
     - zone_df: A GeoDataFrame containing zone geometries.
     - poi_type: A string representing the type of transport POI. Options: "bus_stop", "station", "subway_entrance", "aerodrome", "taxi".
     Returns: A dictionary of zone_id as keys and list of (latitude, longitude) tuples representing matched POIs inside the zone. dictionary: {{zone_id: [(lat, lon), ...]}}
-    Example: get_transport_pois_in_zone(zone_df, poi_df, "subway_entrance") returns coordinates of subway entrances in all zones.
+    Example: get_transport_pois_in_zone(zone_df, "subway_entrance") returns coordinates of subway entrances in all zones.
     
-    (17) self_defined_logic(code):
-    Description: Executes custom Python code to manipulate previous action outputs and predefined datasets.
+(17) self_defined_logic(code):
+    Description: Executes custom Python code to manipulate previous action outputs and access datasets.
+    You have the following imports to use:  
+        "import pandas as pd\n"
+        "import numpy as np\n"
+        "import math\n"
+        "import geopandas as gpd\n"
+        "from shapely.geometry import Point, Polygon, MultiPoint\n"
+        "from collections import defaultdict, Counter\n"
+
     Parameters:
-    - code: A multi-line Python string.
-    - You may reference:
-        - Previous Action results using $action1, $action2, etc. 
-        - Predefined DataFrames: poi_spend_df, parking_df, and zone_df.
-    - Your code must assign a variable called `result`, which will be returned as output.
-    - You may not import external libraries (e.g., pandas, math).
-    - You may not call external tools inside the action_function (only operate on existing data).
+    - code: A multi-line Python string containing your custom code.
+    
+    Data Access:
+    - Previous Action results are accessible using special variables:
+      * For actions with "Needs Loop Over Zones: No":
+        $action1, $action2, etc. contain the direct output of those actions
+      * For actions with "Needs Loop Over Zones: Yes":
+        $action1, $action2, etc. are dictionaries where:
+          - Keys are zone_ids
+          - Values are the function outputs for each zone
+    - Predefined DataFrames: poi_spend_df, parking_df, and zone_df are directly accessible
+    
+    Requirements:
+    - Your code MUST assign a variable called `result` which will be returned
+    - No importing external libraries
+    - No calling other functions/tools within the code
+    - Include error handling for robust execution
 
-    Returns:
-    - The value of `result` after executing the code.
-
-    Example:
-    action_function[
+    Examples:
+    
+    Example 1 (When previous action did NOT use loop):
+    self_defined_logic[
         '''
-        filtered_df = $action2[$action2['competitor_count'] < 3]
-        merged_df = filtered_df.merge(poi_spend_df, on='zone_id', how='left')
-        result = merged_df
+        # $action1 contains a DataFrame from filter_pois_by_top_category without loop
+        # Filter it further
+        filtered_df = $action1[$action1['RAW_NUM_TRANSACTIONS_2023'] > 1000]
+        result = filtered_df
         '''
     ]
+    
+    Example 2 (When previous action DID use loop):
+    self_defined_logic[
+        '''
+        # $action2 is a dictionary where:
+        # - Keys are zone_ids
+        # - Values are DataFrames from get_transport_pois_in_zone with loop
+        
+        # Find zones with at least 3 subway entrances
+        valid_zones = []
+        for zone_id, entrances in $action2.items():
+            if isinstance(entrances, list) and len(entrances) >= 3:
+                valid_zones.append(zone_id)
+                
+        result = valid_zones
+        '''
+    ]
+    
+    Example 3 (Combining results from multiple actions):
+    self_defined_logic[
+        '''
+        # $action1 is a dictionary from a looped population calculation
+        # $action2 is a dictionary from a looped restaurant POI count
+        
+        valid_zones = []
+        for zone_id, population in $action1.items():
+            # Check if zone has enough population and restaurants
+            if population > 10000 and zone_id in $action2:
+                poi_count = len($action2[zone_id])
+                if poi_count >= 5:
+                    valid_zones.append(zone_id)
+                    
+        result = valid_zones
+        '''
+    ]
+
+    
     Here is the documentation for the DataFrames you will be working with:
         ## DataFrame Documentation
 
@@ -449,6 +521,7 @@ You have access to the following functions as tools. Each tool has a specific fo
 - Every Action must use the format: 
 function_name[arg1, arg2, ...]
 Needs Loop Over Zones: Yes or No
+- Do not include any other text in the action.
 - If an action requires zone_id as input but you want to loop through all zones, then you should put -1 as zone_id
 
 
