@@ -85,7 +85,7 @@ hard_11_test_cases = [
     (12000, ">=", 2, 5, ">=", "subway_entrance", 300, "<=", "(A or B) and C"),
     (14000, ">=", 2, 5, ">=", "subway_entrance", 300, "<=", "(A or B) and C"),
     (10000, ">=", 2, 4, ">=", "subway_entrance", 250, "<=", "(A or B) and C"),
-    (15000, ">=", 2, 5, ">=", "bus_stop", 200, "<", "(A or B) and C"),
+    (15000, ">=", 2, 5, ">=", "bus_stop", 200, "<", "A and B and C"),
 ]
 
 all_matched = True
