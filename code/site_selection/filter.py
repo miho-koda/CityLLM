@@ -69,8 +69,18 @@ def get_transport_pois_in_zone(zone_df, poi_type):
         dict: zone_id -> list of (lat, lon)
     """
 
-    # Hardcoded city-level .osm.pbf path
-    pbf_path = "/Users/mihokoda/Desktop/CityLLM/data/safegraph_dataset/Transportation/planet_-71.123,42.2434_-70.8728,42.3814.osm.pbf"
+    import json
+    import os
+
+    # Load config only once per module
+
+    from config_utils import load_config
+
+    config = load_config()
+
+
+    pbf_path = config.get("transport_pbf_path")
+
 
     try:
         if not os.path.exists(pbf_path):

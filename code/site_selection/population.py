@@ -9,13 +9,22 @@ import pandas as pd
 import geopandas as gpd
 from shapely.prepared import prep
 
+
+
+from config_utils import load_config
+
+config = load_config()
+
+
+POP_DIR = config.get("population_dir")
+
+
 def preload_population_shapefile():
     global GLOBAL_SHP
 
     try:
-        pop_dir = "/Users/mihokoda/Desktop/CityLLM/data/safegraph_dataset/Population/Massachusetts"
-        csv_path = os.path.join(pop_dir, "Massachusetts.csv")
-        shp_dir = os.path.join(pop_dir, "shp")
+        csv_path = os.path.join(POP_DIR, "Massachusetts.csv")
+        shp_dir = os.path.join(POP_DIR, "shp")
 
         pop = pd.read_csv(csv_path, skiprows=1)
         pop["GEOID"] = pop["Geography"].str.replace("1500000US", "", regex=False)
@@ -37,34 +46,6 @@ def preload_population_shapefile():
     except Exception as e:
         print(f"❌ Failed to preload shapefile: {e}")
         GLOBAL_SHP = None
-
-
-# def get_population(zone_id, zone_df):
-#     """
-#     Calculate total population in a zone using preloaded GLOBAL_SHP.
-#     If GLOBAL_SHP is not loaded yet, it will load automatically.
-#     """
-#     global GLOBAL_SHP
-
-#     try:
-#         if GLOBAL_SHP is None:
-#             print("ℹ️ GLOBAL_SHP not loaded. Loading now...")
-#             preload_population_shapefile()
-
-#         if zone_id not in zone_df['zone_id'].values:
-#             raise ValueError(f"Zone ID {zone_id} not found in zone_df")
-
-#         zone_geom = zone_df.loc[zone_df['zone_id'] == zone_id, 'geometry'].iloc[0]
-#         matches = GLOBAL_SHP[GLOBAL_SHP["prepared_geom"].apply(lambda g: g.intersects(zone_geom))]
-#         return int(matches["population"].sum())
-
-
-#     except Exception as e:
-#         print(f"❌ Error calculating population for zone {zone_id}: {str(e)}")
-#         return 0
-
-
-
 
 
 

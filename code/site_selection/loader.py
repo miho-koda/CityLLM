@@ -7,12 +7,29 @@ import multiprocessing
 import time
 import functools
 import traceback
+import os
+import json
+import pandas as pd
+
+
+
+
+from config_utils import load_config
+
+config = load_config()
+
+
+
+POI_SPEND_PATH = config.get("poi_spend_path")
+PARKING_PATH = config.get("parking_path")
+
+
 def get_poi_spend_dataset():
     """
     Load the POI spend dataset for all years.
     """
-    base_path = "/Users/mihokoda/Desktop/CityLLM/data/safegraph_dataset/Boston_POI_Spend_with_zones.csv" # use in local
-    poi_spend_df = pd.read_csv(base_path)
+    
+    poi_spend_df = pd.read_csv(POI_SPEND_PATH)
     return poi_spend_df
 
 
@@ -25,7 +42,6 @@ def get_parking_dataset():
     Returns:
         pandas.DataFrame: Parking dataset, filtered by city if specified
     """
-    base_path = "/Users/mihokoda/Desktop/CityLLM/data/safegraph_dataset/Massachusetts_Parking.csv" # use in local
-    parking_df = pd.read_csv(base_path)
+    parking_df = pd.read_csv(PARKING_PATH)
     return parking_df
 

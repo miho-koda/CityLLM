@@ -4,3 +4,5 @@ config.py
 __pycache__/
 .env
 .env.example
+/test_results
+/data
